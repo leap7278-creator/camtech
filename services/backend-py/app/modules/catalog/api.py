@@ -1,0 +1,1028 @@
+from typing import List, Optional, Dict
+from fastapi import APIRouter, Depends, HTTPException, status, Response, Query
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, text, func
+from sqlalchemy.orm import selectinload
+from decimal import Decimal
+
+from app.core.database import get_db
+from app.core.dependencies import get_current_user, TenantUser
+from app.domain.hierarchy_engine import HierarchyEngine
+
+from .models import Product, ProductVariant, Category, ProductImage, slugify
+from .schemas import (
+    ModifierGroupDto,
+    CreateModifierGroupInput,
+    UpdateModifierGroupInput,
+    ModifierOptionDto,
+    ProductDto, ProductImageDto, CreateProductInput, UpdateProductInput, VariantDto,
+    CategoryDto, CategoryTreeNodeDto, CreateCategoryInput, UpdateCategoryInput,
+    ReorderCategoriesInput, BreadcrumbItem,
+    PaginatedResponse, PageMeta
+)
+from app.modules.storage.sync_worker import dispatch_image_sync_job
+
+def build_product_image_dtos(images: Optional[List[ProductImage]]) -> List[ProductImageDto]:
+    if not images:
+        return []
+    sorted_imgs = sorted(images, key=lambda x: (not x.is_primary, x.sort_order))
+    dtos = []
+    for img in sorted_imgs:
+        storage_obj = getattr(img, "storage_object", None)
+        if isinstance(storage_obj, (list, tuple)):
+            storage_obj = storage_obj[0] if storage_obj else None
+            
+        sync_status = getattr(storage_obj, "sync_status", "PENDING") if storage_obj else "PENDING"
+        thumb_url = getattr(storage_obj, "thumbnail_url", None) if storage_obj else None
+        med_url = getattr(storage_obj, "medium_url", None) if storage_obj else None
+        lg_url = getattr(storage_obj, "large_url", None) if storage_obj else None
+        store_url = getattr(storage_obj, "storage_url", None) if storage_obj else None
+        
+        if storage_obj and sync_status == "SYNCED" and thumb_url:
+            dtos.append(ProductImageDto(
+                id=img.id,
+                storageObjectId=img.storage_object_id,
+                url=store_url or med_url or f"/api/v1/storage/{img.storage_object_id}/download",
+                thumbnailUrl=thumb_url,
+                mediumUrl=med_url,
+                largeUrl=lg_url,
+                syncStatus=sync_status,
+                isPrimary=img.is_primary,
+                sortOrder=img.sort_order,
+                altText=img.alt_text,
+            ))
+        else:
+            base_url = f"/api/v1/storage/{img.storage_object_id}/download"
+            dtos.append(ProductImageDto(
+                id=img.id,
+                storageObjectId=img.storage_object_id,
+                url=base_url,
+                thumbnailUrl=f"{base_url}?thumb=1",
+                mediumUrl=base_url,
+                largeUrl=base_url,
+                syncStatus=sync_status,
+                isPrimary=img.is_primary,
+                sortOrder=img.sort_order,
+                altText=img.alt_text,
+            ))
+    return dtos
+
+def to_product_dto(p: Product, sanitize_cost: bool = False) -> ProductDto:
+    img_dtos = build_product_image_dtos(p.images)
+    primary_img = img_dtos[0] if img_dtos else None
+    cat = getattr(p, "category", None)
+    cat_name = cat.name if cat else None
+
+    return ProductDto(
+        id=p.id,
+        organizationId=p.organization_id or "default",
+        name=p.name,
+        description=p.description,
+        categoryId=p.category_id,
+        categoryName=cat_name,
+        brandId=p.brand_id,
+        type=str(p.type) if p.type else "PHYSICAL",
+        isActive=bool(p.is_active),
+        imageUrl=primary_img.url if primary_img else None,
+        thumbnailUrl=primary_img.thumbnailUrl if primary_img else None,
+        mediumUrl=primary_img.mediumUrl if primary_img else None,
+        largeUrl=primary_img.largeUrl if primary_img else None,
+        syncStatus=primary_img.syncStatus if primary_img else None,
+        variants=[
+            VariantDto(
+                id=v.id,
+                productId=v.product_id,
+                sku=v.sku,
+                name=v.name,
+                barcode=v.barcode,
+                unit=v.unit or "piece",
+                currency=v.currency or "USD",
+                costPrice=0.0 if sanitize_cost else float(v.cost_price or 0),
+                sellPrice=float(v.sell_price or 0),
+                taxRatePct=float(v.tax_rate_pct or 0),
+                marginPct=0.0 if sanitize_cost else (
+                    float((v.sell_price - v.cost_price) / v.sell_price * 100)
+                    if v.sell_price and v.sell_price > 0 else 0.0
+                ),
+                isActive=bool(v.is_active)
+            ) for v in (p.variants or [])
+        ],
+        images=img_dtos
+    )
+
+router = APIRouter(tags=["Catalog"])
+
+# ==============================================================================
+# PRODUCTS
+# ==============================================================================
+
+@router.get("/public/products", response_model=PaginatedResponse[ProductDto])
+async def list_public_products(
+    response: Response,
+    search: Optional[str] = None,
+    organization_id: Optional[str] = Query(None, alias="organizationId"),
+    slug: Optional[str] = None,
+    page: int = 1,
+    limit: int = 50,
+    db: AsyncSession = Depends(get_db)
+):
+    """Public customer storefront catalog endpoint (§161, §228).
+    Supports multi-tenant scoping via organizationId or store slug.
+    Does not require enterprise login. Sanitizes internal margins/cost prices.
+    """
+    response.headers["Cache-Control"] = "public, max-age=15, stale-while-revalidate=60"
+    stmt = select(Product).options(
+        selectinload(Product.variants),
+        selectinload(Product.images).selectinload(ProductImage.storage_object),
+        selectinload(Product.category)
+    )
+    
+    # Resolve organization filter
+    target_org_id = organization_id
+    if not target_org_id and slug:
+        from app.modules.organizations.models import Organization
+        org = (await db.execute(select(Organization).where(Organization.slug == slug))).scalar_one_or_none()
+        if org:
+            target_org_id = org.id
+
+    if target_org_id:
+        stmt = stmt.where(Product.organization_id == target_org_id)
+
+    if search:
+        stmt = stmt.where(Product.name.ilike(f"%{search}%"))
+    stmt = stmt.limit(limit).offset((page - 1) * limit)
+
+    result = await db.execute(stmt)
+    products = result.scalars().all()
+    out = [to_product_dto(p, sanitize_cost=True) for p in products]
+    return PaginatedResponse(items=out, meta=PageMeta(page=page, limit=limit, total=len(out), totalPages=1), total=len(out))
+
+@router.get("/products", response_model=PaginatedResponse[ProductDto])
+async def list_products(
+    search: Optional[str] = None,
+    page: int = 1,
+    limit: int = 50,
+    user: TenantUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    stmt = (
+        select(Product)
+        .where(Product.organization_id == user.organization_id)
+        .options(
+            selectinload(Product.variants),
+            selectinload(Product.images).selectinload(ProductImage.storage_object),
+            selectinload(Product.category)
+        )
+    )
+    if search:
+        stmt = stmt.where(Product.name.ilike(f"%{search}%"))
+
+    safe_limit = min(max(limit, 1), 200)
+    safe_offset = max(page - 1, 0) * safe_limit
+    stmt = stmt.order_by(Product.name.asc()).limit(safe_limit).offset(safe_offset)
+
+    result = await db.execute(stmt)
+    products = result.scalars().all()
+    out = [to_product_dto(p) for p in products]
+    return PaginatedResponse(items=out, meta=PageMeta(page=page, limit=limit, total=len(out), totalPages=1), total=len(out))
+
+@router.post("/products", response_model=ProductDto)
+async def create_product(
+    input_data: CreateProductInput,
+    user: TenantUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    product = Product(
+        organization_id=user.organization_id,
+        name=input_data.name,
+        description=input_data.description,
+        category_id=input_data.categoryId,
+        brand_id=input_data.brandId,
+        type=input_data.type or "PHYSICAL",
+        is_active=input_data.isActive if input_data.isActive is not None else True
+    )
+    db.add(product)
+    await db.flush()
+
+    variants = []
+    for v_in in input_data.variants:
+        v = ProductVariant(
+            organization_id=user.organization_id,
+            product_id=product.id,
+            sku=v_in.sku,
+            name=v_in.name or input_data.name,
+            barcode=v_in.barcode,
+            unit=v_in.unit or "piece",
+            currency=v_in.currency or "USD",
+            cost_price=Decimal(str(v_in.costPrice)),
+            sell_price=Decimal(str(v_in.sellPrice)),
+            tax_rate_pct=Decimal(str(v_in.taxRatePct)),
+            is_active=v_in.isActive if v_in.isActive is not None else True
+        )
+        db.add(v)
+        variants.append(v)
+
+    await db.commit()
+
+    # Re-query with eager loads
+    stmt = (
+        select(Product)
+        .where(Product.id == product.id)
+        .options(
+            selectinload(Product.variants),
+            selectinload(Product.images).selectinload(ProductImage.storage_object),
+            selectinload(Product.category)
+        )
+    )
+    p = (await db.execute(stmt)).scalar_one()
+    return to_product_dto(p)
+
+@router.get("/products/{product_id}", response_model=ProductDto)
+async def get_product(
+    product_id: str,
+    user: TenantUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    stmt = (
+        select(Product)
+        .where(Product.id == product_id, Product.organization_id == user.organization_id)
+        .options(
+            selectinload(Product.variants),
+            selectinload(Product.images).selectinload(ProductImage.storage_object),
+            selectinload(Product.category)
+        )
+    )
+    result = await db.execute(stmt)
+    p = result.scalar_one_or_none()
+    if not p:
+        raise HTTPException(status_code=404, detail="Product not found")
+
+    return to_product_dto(p)
+
+@router.patch("/products/{product_id}", response_model=ProductDto)
+@router.put("/products/{product_id}", response_model=ProductDto)
+async def update_product(
+    product_id: str,
+    input_data: UpdateProductInput,
+    user: TenantUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Update master product details and/or variant attributes."""
+    stmt = (
+        select(Product)
+        .where(Product.id == product_id, Product.organization_id == user.organization_id)
+        .options(
+            selectinload(Product.variants),
+            selectinload(Product.images).selectinload(ProductImage.storage_object),
+            selectinload(Product.category)
+        )
+    )
+    result = await db.execute(stmt)
+    product = result.scalar_one_or_none()
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+
+    # Update master fields
+    if input_data.name is not None:
+        product.name = input_data.name
+    if input_data.description is not None:
+        product.description = input_data.description
+    if input_data.categoryId is not None:
+        product.category_id = input_data.categoryId if input_data.categoryId else None
+    if input_data.brandId is not None:
+        product.brand_id = input_data.brandId if input_data.brandId else None
+    if input_data.type is not None:
+        product.type = input_data.type
+    if input_data.isActive is not None:
+        product.is_active = input_data.isActive
+
+    # Update or add variants
+    if input_data.variants is not None:
+        existing_variants = {v.id: v for v in product.variants}
+        for v_in in input_data.variants:
+            if v_in.id and v_in.id in existing_variants:
+                v = existing_variants[v_in.id]
+                if v_in.sku is not None:
+                    v.sku = v_in.sku
+                if v_in.name is not None:
+                    v.name = v_in.name
+                if v_in.barcode is not None:
+                    v.barcode = v_in.barcode
+                if v_in.unit is not None:
+                    v.unit = v_in.unit
+                if v_in.currency is not None:
+                    v.currency = v_in.currency
+                if v_in.costPrice is not None:
+                    v.cost_price = Decimal(str(v_in.costPrice))
+                if v_in.sellPrice is not None:
+                    v.sell_price = Decimal(str(v_in.sellPrice))
+                if v_in.taxRatePct is not None:
+                    v.tax_rate_pct = Decimal(str(v_in.taxRatePct))
+                if v_in.isActive is not None:
+                    v.is_active = v_in.isActive
+            elif not v_in.id and v_in.sku:
+                # Create new variant
+                new_v = ProductVariant(
+                    organization_id=user.organization_id,
+                    product_id=product.id,
+                    sku=v_in.sku,
+                    name=v_in.name or product.name,
+                    barcode=v_in.barcode,
+                    unit=v_in.unit or "piece",
+                    currency=v_in.currency or "USD",
+                    cost_price=Decimal(str(v_in.costPrice or 0)),
+                    sell_price=Decimal(str(v_in.sellPrice or 0)),
+                    tax_rate_pct=Decimal(str(v_in.taxRatePct or 0)),
+                    is_active=v_in.isActive if v_in.isActive is not None else True
+                )
+                db.add(new_v)
+
+    await db.commit()
+
+    # Re-fetch fresh entity
+    stmt_fresh = (
+        select(Product)
+        .where(Product.id == product_id)
+        .options(
+            selectinload(Product.variants),
+            selectinload(Product.images).selectinload(ProductImage.storage_object),
+            selectinload(Product.category)
+        )
+    )
+    p_fresh = (await db.execute(stmt_fresh)).scalar_one()
+    return to_product_dto(p_fresh)
+
+@router.delete("/products/{product_id}")
+async def delete_product(
+    product_id: str,
+    user: TenantUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Delete product or soft-archive if historical transactions exist (§GoldenRule 9)."""
+    stmt = (
+        select(Product)
+        .where(Product.id == product_id, Product.organization_id == user.organization_id)
+        .options(selectinload(Product.variants))
+    )
+    result = await db.execute(stmt)
+    product = result.scalar_one_or_none()
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+
+    variant_ids = [v.id for v in product.variants]
+    has_transactions = False
+
+    if variant_ids:
+        check_sql = text("""
+            SELECT 1 FROM (
+                SELECT "productVariantId" FROM sale_line_items WHERE "productVariantId" = ANY(:vids)
+                UNION ALL
+                SELECT "productVariantId" FROM purchase_order_line_items WHERE "productVariantId" = ANY(:vids)
+                UNION ALL
+                SELECT "productVariantId" FROM goods_receipt_line_items WHERE "productVariantId" = ANY(:vids)
+                UNION ALL
+                SELECT "productVariantId" FROM stock_transfer_lines WHERE "productVariantId" = ANY(:vids)
+            ) t LIMIT 1
+        """)
+        has_transactions = bool((await db.execute(check_sql, {"vids": variant_ids})).scalar())
+
+    if has_transactions:
+        # Soft-archive / deactivate to preserve historical audit trail
+        product.is_active = False
+        for v in product.variants:
+            v.is_active = False
+        await db.commit()
+        return {
+            "deleted": True,
+            "archived": True,
+            "id": product_id,
+            "message": "Product has existing transaction history and has been deactivated/archived to preserve ledger integrity."
+        }
+    else:
+        # Hard delete
+        await db.delete(product)
+        await db.commit()
+        return {
+            "deleted": True,
+            "archived": False,
+            "id": product_id,
+            "message": "Product deleted successfully."
+        }
+
+# ==============================================================================
+# PRODUCT IMAGES
+# ==============================================================================
+
+from .models import ProductImage
+from .schemas import ProductImageDto, AddProductImageInput, ReorderImagesInput
+
+@router.post("/products/{product_id}/images", response_model=ProductImageDto)
+async def add_product_image(
+    product_id: str,
+    data: AddProductImageInput,
+    user: TenantUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    # Verify product exists
+    prod_res = await db.execute(
+        select(Product).where(Product.id == product_id, Product.organization_id == user.organization_id)
+    )
+    if not prod_res.scalar_one_or_none():
+        raise HTTPException(status_code=404, detail="Product not found")
+
+    # Get max sort_order
+    order_res = await db.execute(
+        select(ProductImage.sort_order)
+        .where(ProductImage.product_id == product_id)
+        .order_by(ProductImage.sort_order.desc())
+        .limit(1)
+    )
+    max_order = order_res.scalar_one_or_none() or 0
+    is_primary = data.isPrimary or max_order == 0
+
+    if is_primary:
+        await db.execute(
+            text("UPDATE product_images SET \"isPrimary\" = false WHERE \"productId\" = :pid"),
+            {"pid": product_id}
+        )
+
+    img = ProductImage(
+        organization_id=user.organization_id,
+        product_id=product_id,
+        storage_object_id=data.storageObjectId,
+        is_primary=is_primary,
+        alt_text=data.altText,
+        sort_order=max_order + 1
+    )
+    db.add(img)
+    await db.commit()
+    await db.refresh(img)
+    
+    # Enqueue background sync to Cloudflare R2 / CDN
+    try:
+        await dispatch_image_sync_job(
+            image_id=data.storageObjectId,
+            entity_type="product",
+            entity_id=product_id
+        )
+    except Exception as exc:
+        pass
+
+    base_url = f"/api/v1/storage/{img.storage_object_id}/download"
+    return {
+        "id": img.id,
+        "storageObjectId": img.storage_object_id,
+        "url": base_url,
+        "thumbnailUrl": f"{base_url}?thumb=1",
+        "mediumUrl": base_url,
+        "largeUrl": base_url,
+        "syncStatus": "PENDING",
+        "isPrimary": img.is_primary,
+        "sortOrder": img.sort_order,
+        "altText": img.alt_text
+    }
+
+@router.delete("/products/{product_id}/images/{image_id}")
+async def delete_product_image(
+    product_id: str,
+    image_id: str,
+    user: TenantUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    res = await db.execute(
+        select(ProductImage).where(
+            ProductImage.id == image_id,
+            ProductImage.product_id == product_id,
+            ProductImage.organization_id == user.organization_id
+        )
+    )
+    img = res.scalar_one_or_none()
+    if not img:
+        raise HTTPException(status_code=404, detail="Product image not found")
+        
+    await db.delete(img)
+    await db.commit()
+    return {"success": True}
+
+@router.patch("/products/{product_id}/images/{image_id}/primary")
+async def set_primary_product_image(
+    product_id: str,
+    image_id: str,
+    user: TenantUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    res = await db.execute(
+        select(ProductImage).where(
+            ProductImage.id == image_id,
+            ProductImage.product_id == product_id,
+            ProductImage.organization_id == user.organization_id
+        )
+    )
+    img = res.scalar_one_or_none()
+    if not img:
+        raise HTTPException(status_code=404, detail="Product image not found")
+        
+    await db.execute(
+        f"UPDATE product_images SET \"isPrimary\" = false WHERE \"productId\" = '{product_id}'"
+    )
+    
+    img.is_primary = True
+    await db.commit()
+    return {"success": True}
+
+@router.patch("/products/{product_id}/images/reorder")
+async def reorder_product_images(
+    product_id: str,
+    data: ReorderImagesInput,
+    user: TenantUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    res = await db.execute(
+        select(ProductImage).where(
+            ProductImage.product_id == product_id,
+            ProductImage.organization_id == user.organization_id
+        )
+    )
+    images = res.scalars().all()
+    img_map = {i.id: i for i in images}
+    
+    for idx, i_id in enumerate(data.imageIds):
+        if i_id in img_map:
+            img_map[i_id].sort_order = idx
+            
+    await db.commit()
+    return {"success": True}
+
+# ==============================================================================
+# CATEGORIES — Helpers
+# ==============================================================================
+
+def _compute_level(cat_id: str, parent_map: Dict[str, Optional[str]]) -> int:
+    """Walk up the parent chain to compute depth level."""
+    level = 0
+    curr = parent_map.get(cat_id)
+    visited: set = set()
+    while curr and curr not in visited:
+        level += 1
+        visited.add(curr)
+        curr = parent_map.get(curr)
+    return level
+
+
+def _build_breadcrumb(cat_id: str, all_cats_map: Dict[str, Category]) -> List[BreadcrumbItem]:
+    """Build breadcrumb from root → current category."""
+    path: List[BreadcrumbItem] = []
+    curr_id: Optional[str] = cat_id
+    visited: set = set()
+    while curr_id and curr_id in all_cats_map:
+        if curr_id in visited:
+            break
+        visited.add(curr_id)
+        c = all_cats_map[curr_id]
+        path.append(BreadcrumbItem(id=c.id, name=c.name))
+        curr_id = c.parent_id
+    path.reverse()
+    return path
+
+
+def _to_category_dto(
+    c: Category,
+    children_counts: Dict[str, int],
+    product_counts: Dict[str, int],
+    all_cats_map: Dict[str, Category],
+) -> CategoryDto:
+    return CategoryDto(
+        id=c.id,
+        organizationId=c.organization_id,
+        parentId=c.parent_id,
+        name=c.name,
+        description=c.description,
+        slug=c.slug,
+        icon=c.icon,
+        imageUrl=c.image_url,
+        level=c.level or 0,
+        sortOrder=c.sort_order or 0,
+        isActive=bool(c.is_active) if c.is_active is not None else True,
+        seoTitle=c.seo_title,
+        seoDescription=c.seo_description,
+        productCount=product_counts.get(c.id, c.product_count or 0),
+        breadcrumb=_build_breadcrumb(c.id, all_cats_map),
+        createdAt=c.created_at.isoformat() if c.created_at else None,
+        childrenCount=children_counts.get(c.id, 0),
+    )
+
+
+async def _get_product_counts(db: AsyncSession, org_id: str) -> Dict[str, int]:
+    """Aggregate product counts per category from the products table."""
+    stmt = (
+        select(Product.category_id, func.count(Product.id))
+        .where(Product.organization_id == org_id, Product.category_id.isnot(None))
+        .group_by(Product.category_id)
+    )
+    rows = (await db.execute(stmt)).all()
+    return {str(cid): int(cnt) for cid, cnt in rows}
+
+
+# ==============================================================================
+# CATEGORIES — Endpoints
+# ==============================================================================
+
+@router.get("/categories", response_model=List[CategoryDto])
+async def list_categories(
+    parentId: Optional[str] = None,
+    user: TenantUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    stmt = select(Category).where(Category.organization_id == user.organization_id)
+    if parentId is not None:
+        if parentId == "" or parentId.lower() == "null":
+            stmt = stmt.where(Category.parent_id.is_(None))
+        else:
+            stmt = stmt.where(Category.parent_id == parentId)
+
+    result = await db.execute(stmt)
+    categories = result.scalars().all()
+
+    # Fetch all categories for children counts, breadcrumb, and parent map
+    all_cat_res = await db.execute(
+        select(Category).where(Category.organization_id == user.organization_id)
+    )
+    all_cats = all_cat_res.scalars().all()
+    all_cats_map: Dict[str, Category] = {c.id: c for c in all_cats}
+    children_counts: Dict[str, int] = {}
+    for c in all_cats:
+        if c.parent_id:
+            children_counts[c.parent_id] = children_counts.get(c.parent_id, 0) + 1
+
+    # Aggregate live product counts
+    product_counts = await _get_product_counts(db, user.organization_id)
+
+    # Sort by sortOrder then name
+    sorted_cats = sorted(categories, key=lambda c: (c.sort_order or 0, c.name or ""))
+
+    return [
+        _to_category_dto(c, children_counts, product_counts, all_cats_map)
+        for c in sorted_cats
+    ]
+
+@router.get("/categories/tree", response_model=List[CategoryTreeNodeDto])
+async def get_categories_tree(
+    user: TenantUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    result = await db.execute(
+        select(Category).where(Category.organization_id == user.organization_id)
+    )
+    categories = result.scalars().all()
+    product_counts = await _get_product_counts(db, user.organization_id)
+
+    dict_items = [
+        {
+            "id": c.id,
+            "organizationId": c.organization_id,
+            "parentId": c.parent_id,
+            "name": c.name,
+            "description": c.description,
+            "slug": c.slug,
+            "icon": c.icon,
+            "imageUrl": c.image_url,
+            "level": c.level or 0,
+            "sortOrder": c.sort_order or 0,
+            "isActive": bool(c.is_active) if c.is_active is not None else True,
+            "productCount": product_counts.get(c.id, c.product_count or 0),
+        }
+        for c in categories
+    ]
+
+    return HierarchyEngine.build_tree(
+        dict_items,
+        id_key="id",
+        parent_key="parentId",
+        children_key="children",
+        sort_by="sortOrder"
+    )
+
+@router.get("/public/categories/tree", response_model=List[CategoryTreeNodeDto])
+async def get_public_categories_tree(
+    response: Response,
+    organization_id: Optional[str] = Query(None, alias="organizationId"),
+    slug: Optional[str] = None,
+    db: AsyncSession = Depends(get_db)
+):
+    """Public endpoint returning the active category tree (no auth required).
+    Supports store-specific filtering via organizationId or slug."""
+    response.headers["Cache-Control"] = "public, max-age=30, stale-while-revalidate=120"
+    
+    target_org_id = organization_id
+    if not target_org_id and slug:
+        from app.modules.organizations.models import Organization
+        org = (await db.execute(select(Organization).where(Organization.slug == slug))).scalar_one_or_none()
+        if org:
+            target_org_id = org.id
+
+    stmt = select(Category).where(Category.is_active == True)
+    if target_org_id:
+        stmt = stmt.where(Category.organization_id == target_org_id)
+
+    result = await db.execute(stmt)
+    categories = result.scalars().all()
+
+    dict_items = [
+        {
+            "id": c.id,
+            "organizationId": c.organization_id,
+            "parentId": c.parent_id,
+            "name": c.name,
+            "description": c.description,
+            "slug": c.slug,
+            "icon": c.icon,
+            "imageUrl": c.image_url,
+            "level": c.level or 0,
+            "sortOrder": c.sort_order or 0,
+            "isActive": True,
+            "productCount": c.product_count or 0,
+        }
+        for c in categories
+    ]
+
+    return HierarchyEngine.build_tree(
+        dict_items,
+        id_key="id",
+        parent_key="parentId",
+        children_key="children",
+        sort_by="sortOrder"
+    )
+
+@router.post("/categories", response_model=CategoryDto)
+async def create_category(
+    cat_in: CreateCategoryInput,
+    user: TenantUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    parent_cat = None
+    if cat_in.parentId:
+        p_res = await db.execute(
+            select(Category).where(
+                Category.id == cat_in.parentId,
+                Category.organization_id == user.organization_id
+            )
+        )
+        parent_cat = p_res.scalar_one_or_none()
+        if not parent_cat:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Parent category not found")
+
+    # Auto-generate slug from name if not provided
+    slug = cat_in.slug or slugify(cat_in.name)
+
+    # Compute level from parent chain
+    level = 0
+    if parent_cat:
+        all_res = await db.execute(
+            select(Category).where(Category.organization_id == user.organization_id)
+        )
+        parent_map = {c.id: c.parent_id for c in all_res.scalars().all()}
+        parent_map[cat_in.parentId] = parent_cat.parent_id  # ensure parent is in map
+        level = 1 + _compute_level(cat_in.parentId, parent_map)
+
+    # Auto sort_order: place at end of siblings
+    sort_order = cat_in.sortOrder
+    if sort_order is None:
+        sibling_stmt = select(func.coalesce(func.max(Category.sort_order), -1)).where(
+            Category.organization_id == user.organization_id,
+            Category.parent_id == cat_in.parentId if cat_in.parentId else Category.parent_id.is_(None)
+        )
+        max_order = (await db.execute(sibling_stmt)).scalar() or 0
+        sort_order = max_order + 1
+
+    cat = Category(
+        organization_id=user.organization_id,
+        name=cat_in.name,
+        description=cat_in.description,
+        parent_id=cat_in.parentId,
+        slug=slug,
+        icon=cat_in.icon,
+        image_url=cat_in.imageUrl,
+        level=level,
+        sort_order=sort_order,
+        seo_title=cat_in.seoTitle,
+        seo_description=cat_in.seoDescription,
+    )
+    db.add(cat)
+    await db.commit()
+    await db.refresh(cat)
+
+    all_cats_map: Dict[str, Category] = {cat.id: cat}
+    if parent_cat:
+        all_cats_map[parent_cat.id] = parent_cat
+
+    return _to_category_dto(cat, {}, {}, all_cats_map)
+
+@router.patch("/categories/{category_id}", response_model=CategoryDto)
+@router.put("/categories/{category_id}", response_model=CategoryDto)
+async def update_category(
+    category_id: str,
+    cat_in: UpdateCategoryInput,
+    user: TenantUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    result = await db.execute(
+        select(Category).where(
+            Category.id == category_id,
+            Category.organization_id == user.organization_id
+        )
+    )
+    cat = result.scalar_one_or_none()
+    if not cat:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Category not found")
+
+    # Fetch all categories for parent map operations
+    all_res = await db.execute(
+        select(Category).where(Category.organization_id == user.organization_id)
+    )
+    all_cats = all_res.scalars().all()
+    parent_map = {c.id: c.parent_id for c in all_cats}
+    all_cats_map: Dict[str, Category] = {c.id: c for c in all_cats}
+
+    if cat_in.parentId is not None and cat_in.parentId != cat.parent_id:
+        if HierarchyEngine.has_circular_dependency(parent_map, category_id, cat_in.parentId):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Circular category dependency detected: A category cannot be set as child of itself or its descendants"
+            )
+        cat.parent_id = cat_in.parentId
+        # Recompute level
+        parent_map[category_id] = cat_in.parentId
+        cat.level = _compute_level(category_id, parent_map)
+
+    if cat_in.name is not None:
+        cat.name = cat_in.name
+        # Re-slug if name changes and no explicit slug provided
+        if cat_in.slug is None:
+            cat.slug = slugify(cat_in.name)
+    if cat_in.slug is not None:
+        cat.slug = cat_in.slug
+    if cat_in.description is not None:
+        cat.description = cat_in.description
+    if cat_in.icon is not None:
+        cat.icon = cat_in.icon
+    if cat_in.imageUrl is not None:
+        cat.image_url = cat_in.imageUrl
+    if cat_in.seoTitle is not None:
+        cat.seo_title = cat_in.seoTitle
+    if cat_in.seoDescription is not None:
+        cat.seo_description = cat_in.seoDescription
+    if cat_in.sortOrder is not None:
+        cat.sort_order = cat_in.sortOrder
+    if cat_in.isActive is not None:
+        cat.is_active = cat_in.isActive
+
+    await db.commit()
+    await db.refresh(cat)
+
+    # Refresh all_cats_map with updated cat
+    all_cats_map[cat.id] = cat
+    children_counts: Dict[str, int] = {}
+    for c in all_cats:
+        if c.parent_id:
+            children_counts[c.parent_id] = children_counts.get(c.parent_id, 0) + 1
+    product_counts = await _get_product_counts(db, user.organization_id)
+
+    return _to_category_dto(cat, children_counts, product_counts, all_cats_map)
+
+@router.patch("/categories/reorder")
+async def reorder_categories(
+    data: ReorderCategoriesInput,
+    user: TenantUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Bulk-update sortOrder for multiple categories."""
+    if not data.items:
+        return {"updated": 0}
+
+    ids = [item.id for item in data.items]
+    result = await db.execute(
+        select(Category).where(
+            Category.id.in_(ids),
+            Category.organization_id == user.organization_id
+        )
+    )
+    cat_map = {c.id: c for c in result.scalars().all()}
+
+    updated = 0
+    for item in data.items:
+        if item.id in cat_map:
+            cat_map[item.id].sort_order = item.sortOrder
+            updated += 1
+
+    await db.commit()
+    return {"updated": updated}
+
+@router.delete("/categories/{category_id}")
+async def delete_category(
+    category_id: str,
+    user: TenantUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    result = await db.execute(
+        select(Category).where(
+            Category.id == category_id,
+            Category.organization_id == user.organization_id
+        )
+    )
+    cat = result.scalar_one_or_none()
+    if not cat:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Category not found")
+
+    child_check = await db.execute(
+        select(Category).where(
+            Category.parent_id == category_id,
+            Category.organization_id == user.organization_id
+        )
+    )
+    if child_check.scalars().first():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot delete category with active child categories"
+        )
+
+    await db.delete(cat)
+    await db.commit()
+    return {"deleted": True, "id": category_id}
+
+
+# ─── MODIFIERS ────────────────────────────────────────────────────────
+
+router_modifiers = APIRouter(prefix="/modifiers", tags=["modifiers"])
+
+@router_modifiers.get("", response_model=PaginatedResponse[ModifierGroupDto])
+async def list_modifier_groups(
+    page: int = 1,
+    limit: int = 20,
+    user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    offset = (page - 1) * limit
+    stmt = select(ModifierGroup).where(ModifierGroup.organization_id == user.organization_id).order_by(ModifierGroup.created_at.desc())
+    total = await db.scalar(select(func.count()).select_from(stmt.subquery()))
+    stmt = stmt.offset(offset).limit(limit)
+    result = await db.execute(stmt)
+    groups = result.scalars().all()
+    
+    dtos = []
+    for g in groups:
+        opts = [ModifierOptionDto(
+            id=o.id, groupId=o.group_id, name=o.name, priceAdjustment=float(o.price_adjustment),
+            sortOrder=o.sort_order, isActive=o.is_active
+        ) for o in g.options]
+        dtos.append(ModifierGroupDto(
+            id=g.id, organizationId=g.organization_id, name=g.name, description=g.description,
+            minSelections=g.min_selections, maxSelections=g.max_selections, isActive=g.is_active,
+            options=opts
+        ))
+        
+    return PaginatedResponse(
+        items=dtos,
+        meta=PageMeta(page=page, limit=limit, total=total or 0, totalPages=((total or 0) + limit - 1) // limit),
+        total=total
+    )
+
+@router_modifiers.post("", response_model=ModifierGroupDto, status_code=status.HTTP_201_CREATED)
+async def create_modifier_group(
+    data: CreateModifierGroupInput,
+    user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    group = ModifierGroup(
+        organization_id=user.organization_id,
+        name=data.name,
+        description=data.description,
+        min_selections=data.minSelections,
+        max_selections=data.maxSelections,
+        is_active=data.isActive
+    )
+    db.add(group)
+    await db.flush()
+    
+    for opt_in in data.options:
+        opt = ModifierOption(
+            group_id=group.id,
+            name=opt_in.name,
+            price_adjustment=opt_in.priceAdjustment,
+            sort_order=opt_in.sortOrder,
+            is_active=opt_in.isActive
+        )
+        db.add(opt)
+        
+    await db.commit()
+    await db.refresh(group)
+    
+    opts = [ModifierOptionDto(
+        id=o.id, groupId=o.group_id, name=o.name, priceAdjustment=float(o.price_adjustment),
+        sortOrder=o.sort_order, isActive=o.is_active
+    ) for o in group.options]
+    
+    return ModifierGroupDto(
+        id=group.id, organizationId=group.organization_id, name=group.name, description=group.description,
+        minSelections=group.min_selections, maxSelections=group.max_selections, isActive=group.is_active,
+        options=opts
+    )

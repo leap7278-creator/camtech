@@ -1,0 +1,397 @@
+version: '3.8'
+
+# MyStore Enterprise Platform — Full Microservices Architecture
+# Usage: docker compose up -d
+
+services:
+  # ==============================================================================
+  # DATA CENTER (CENTRAL PERSISTENCE & CACHE)
+  # ==============================================================================
+  postgres:
+    image: postgres:16-alpine
+    container_name: mystore-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: mystore
+      POSTGRES_PASSWORD: mystore_dev
+      POSTGRES_DB: mystore
+    ports:
+      - '5432:5432'
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U mystore']
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - mystore-net
+
+  postgres-replica:
+    image: postgres:16-alpine
+    container_name: mystore-postgres-replica
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: mystore
+      POSTGRES_PASSWORD: mystore_dev
+      POSTGRES_DB: mystore
+      PGUSER: mystore
+      PGPASSWORD: mystore_dev
+    ports:
+      - '5434:5432'
+    volumes:
+      - pgreplicadata:/var/lib/postgresql/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - mystore-net
+
+  redis:
+    image: redis:7-alpine
+    container_name: mystore-redis
+    restart: unless-stopped
+    ports:
+      - '6379:6379'
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - mystore-net
+
+  pgbouncer:
+    image: edoburu/pgbouncer:latest
+    container_name: mystore-pgbouncer
+    restart: unless-stopped
+    environment:
+      - DB_USER=mystore
+      - DB_PASSWORD=mystore_dev
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_NAME=mystore
+      - POOL_MODE=transaction
+      - MAX_CLIENT_CONN=1000
+      - DEFAULT_POOL_SIZE=50
+      - RESERVE_POOL_SIZE=10
+      - LISTEN_PORT=6432
+      - AUTH_TYPE=scram-sha-256
+    ports:
+      - '6432:6432'
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - mystore-net
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:latest
+    container_name: mystore-otel-collector
+    restart: unless-stopped
+    command: ["--config=/etc/otelcol-contrib/config.yaml"]
+    volumes:
+      - ./infra/telemetry/otel-collector-config.yaml:/etc/otelcol-contrib/config.yaml
+    ports:
+      - '4317:4317'
+      - '4318:4318'
+    networks:
+      - mystore-net
+
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    container_name: mystore-jaeger
+    restart: unless-stopped
+    ports:
+      - '16686:16686'
+    networks:
+      - mystore-net
+
+  # ==============================================================================
+  # API GATEWAY (PORT 4000)
+  # ==============================================================================
+  api-gateway:
+    build:
+      context: ./services/backend-py
+      dockerfile: Dockerfile
+    container_name: mystore-api-gateway
+    restart: unless-stopped
+    command: python -m uvicorn app.microservices.gateway:gateway --host 0.0.0.0 --port 4000
+    ports:
+      - '4000:4000'
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://mystore:mystore_dev@postgres:5432/mystore
+      - JWT_SECRET=mystore_super_secret_jwt_key_2026_enterprise_standard
+      - AUTH_SERVICE_URL=http://auth-service:4001
+      - CATALOG_SERVICE_URL=http://catalog-service:4002
+      - SALES_SERVICE_URL=http://sales-service:4003
+      - DELIVERY_SERVICE_URL=http://delivery-service:4004
+      - HR_SERVICE_URL=http://hr-service:4005
+      - FINANCE_SERVICE_URL=http://finance-service:4006
+      - PLATFORM_SERVICE_URL=http://platform-service:4007
+      - BOT_BUILDER_SERVICE_URL=http://bot-builder-service:4008
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - mystore-net
+
+  # ==============================================================================
+  # BACKEND MICROSERVICES (PORTS 4001 - 4008)
+  # ==============================================================================
+  auth-service:
+    build:
+      context: ./services/backend-py
+      dockerfile: Dockerfile
+    container_name: mystore-auth-service
+    restart: unless-stopped
+    command: python -m uvicorn app.microservices.auth_service:app --host 0.0.0.0 --port 4001
+    ports:
+      - '4001:4001'
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://mystore:mystore_dev@postgres:5432/mystore
+      - JWT_SECRET=mystore_super_secret_jwt_key_2026_enterprise_standard
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - mystore-net
+
+  catalog-service:
+    build:
+      context: ./services/backend-py
+      dockerfile: Dockerfile
+    container_name: mystore-catalog-service
+    restart: unless-stopped
+    command: python -m uvicorn app.microservices.catalog_service:app --host 0.0.0.0 --port 4002
+    ports:
+      - '4002:4002'
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://mystore:mystore_dev@postgres:5432/mystore
+      - JWT_SECRET=mystore_dev_jwt_secret_key_change_in_production
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - mystore-net
+
+  sales-service:
+    build:
+      context: ./services/backend-py
+      dockerfile: Dockerfile
+    container_name: mystore-sales-service
+    restart: unless-stopped
+    command: python -m uvicorn app.microservices.sales_service:app --host 0.0.0.0 --port 4003
+    ports:
+      - '4003:4003'
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://mystore:mystore_dev@postgres:5432/mystore
+      - JWT_SECRET=mystore_dev_jwt_secret_key_change_in_production
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - mystore-net
+
+  delivery-service:
+    build:
+      context: ./services/backend-py
+      dockerfile: Dockerfile
+    container_name: mystore-delivery-service
+    restart: unless-stopped
+    command: python -m uvicorn app.microservices.delivery_service:app --host 0.0.0.0 --port 4004
+    ports:
+      - '4004:4004'
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://mystore:mystore_dev@postgres:5432/mystore
+      - JWT_SECRET=mystore_dev_jwt_secret_key_change_in_production
+      - REDIS_URL=redis://redis:6379/0
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - mystore-net
+
+  hr-service:
+    build:
+      context: ./services/backend-py
+      dockerfile: Dockerfile
+    container_name: mystore-hr-service
+    restart: unless-stopped
+    command: python -m uvicorn app.microservices.hr_service:app --host 0.0.0.0 --port 4005
+    ports:
+      - '4005:4005'
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://mystore:mystore_dev@postgres:5432/mystore
+      - JWT_SECRET=mystore_dev_jwt_secret_key_change_in_production
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - mystore-net
+
+  finance-service:
+    build:
+      context: ./services/backend-py
+      dockerfile: Dockerfile
+    container_name: mystore-finance-service
+    restart: unless-stopped
+    command: python -m uvicorn app.microservices.finance_service:app --host 0.0.0.0 --port 4006
+    ports:
+      - '4006:4006'
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://mystore:mystore_dev@postgres:5432/mystore
+      - JWT_SECRET=mystore_dev_jwt_secret_key_change_in_production
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - mystore-net
+
+  platform-service:
+    build:
+      context: ./services/backend-py
+      dockerfile: Dockerfile
+    container_name: mystore-platform-service
+    restart: unless-stopped
+    command: python -m uvicorn app.microservices.platform_service:app --host 0.0.0.0 --port 4007
+    ports:
+      - '4007:4007'
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://mystore:mystore_dev@postgres:5432/mystore
+      - JWT_SECRET=mystore_super_secret_jwt_key_2026_enterprise_standard
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - mystore-net
+
+  bot-builder-service:
+    build:
+      context: ./services/backend-py
+      dockerfile: Dockerfile
+    container_name: mystore-bot-builder-service
+    restart: unless-stopped
+    command: python -m uvicorn app.microservices.bot_builder_service:app --host 0.0.0.0 --port 4008
+    ports:
+      - '4008:4008'
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://mystore:mystore_dev@postgres:5432/mystore
+      - JWT_SECRET=mystore_super_secret_jwt_key_2026_enterprise_standard
+      - REDIS_URL=redis://redis:6379/0
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+      - GATEWAY_URL=${GATEWAY_URL:-http://localhost:4000}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - mystore-net
+
+  # ==============================================================================
+  # INDEPENDENT FRONTEND CONTAINERS (ISOLATED PORTS & FAULT TOLERANCE)
+  # ==============================================================================
+  pos-app:
+    build:
+      context: .
+      dockerfile: apps/Dockerfile
+    container_name: mystore-pos-app
+    restart: unless-stopped
+    command: pnpm --filter @mystore/cashier dev
+    ports:
+      - '5003:5003'   # Cashier POS (Standalone Isolated Container)
+    networks:
+      - mystore-net
+
+  store-app:
+    build:
+      context: .
+      dockerfile: apps/Dockerfile
+    container_name: mystore-store-app
+    restart: unless-stopped
+    command: pnpm --filter @mystore/store dev
+    ports:
+      - '5001:5001'   # Customer Storefront Container
+    networks:
+      - mystore-net
+
+  admin-app:
+    build:
+      context: .
+      dockerfile: apps/Dockerfile
+    container_name: mystore-admin-app
+    restart: unless-stopped
+    command: pnpm --filter @mystore/web dev
+    ports:
+      - '5002:5002'   # Enterprise Admin Container
+    networks:
+      - mystore-net
+
+  delivery-app:
+    build:
+      context: .
+      dockerfile: apps/Dockerfile
+    container_name: mystore-delivery-app
+    restart: unless-stopped
+    command: pnpm --filter @mystore/delivery dev
+    ports:
+      - '5004:5004'   # Courier Driver Container
+    networks:
+      - mystore-net
+
+  hr-app:
+    build:
+      context: .
+      dockerfile: apps/Dockerfile
+    container_name: mystore-hr-app
+    restart: unless-stopped
+    command: pnpm --filter @mystore/hr dev
+    ports:
+      - '5005:5005'   # HR Workforce Container
+    networks:
+      - mystore-net
+
+  ceo-app:
+    build:
+      context: .
+      dockerfile: apps/Dockerfile
+    container_name: mystore-ceo-app
+    restart: unless-stopped
+    command: pnpm --filter @mystore/ceo dev
+    ports:
+      - '5008:5008'   # CEO Command Center Container
+    networks:
+      - mystore-net
+
+volumes:
+  pgdata:
+  pgreplicadata:
+  redisdata:
+
+networks:
+  mystore-net:
+    driver: bridge

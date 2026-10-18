@@ -1,0 +1,261 @@
+import { z } from 'zod';
+
+export const CURRENCIES = ['USD', 'KHR', 'THB', 'CNY', 'EUR'] as const;
+export type Currency = (typeof CURRENCIES)[number];
+
+export const UNITS = ['piece', 'box', 'pack', 'carton', 'kg', 'g', 'liter', 'ml'] as const;
+export type Unit = (typeof UNITS)[number];
+
+export const PRODUCT_TYPES = ['PHYSICAL', 'DIGITAL', 'SERVICE', 'BUNDLE', 'RAW_MATERIAL'] as const;
+export type ProductType = (typeof PRODUCT_TYPES)[number];
+
+/** Money must be non-negative and sane (≤ 2 dp). */
+const money = z
+  .number()
+  .nonnegative()
+  .refine((n) => Number.isFinite(n) && Math.round(n * 100) === n * 100, {
+    message: 'Amount must have at most 2 decimal places',
+  });
+
+export const createProductVariantSchema = z.object({
+  sku: z
+    .string()
+    .trim()
+    .min(1, 'SKU is required')
+    .max(64)
+    .regex(/^[A-Za-z0-9._-]+$/, 'SKU may contain letters, numbers, . _ -'),
+  name: z.string().trim().max(100).optional().nullable(),
+  barcode: z.string().trim().max(64).optional().nullable(),
+  unit: z.enum(UNITS).default('piece'),
+  currency: z.enum(CURRENCIES).default('USD'),
+  costPrice: money,
+  sellPrice: money,
+  taxRatePct: z.number().min(0).max(100).default(0),
+  isActive: z.boolean().default(true),
+});
+
+export const createProductSchema = z.object({
+  name: z.string().trim().min(1, 'Name is required').max(200),
+  description: z.string().trim().max(2000).optional().nullable(),
+  type: z.enum(PRODUCT_TYPES).default('PHYSICAL'),
+  categoryId: z.string().optional().nullable(),
+  brandId: z.string().optional().nullable(),
+  isActive: z.boolean().default(true),
+  variants: z.array(createProductVariantSchema).min(1, 'At least one variant is required'),
+  modifierGroupIds: z.array(z.string()).optional(),
+});
+
+export const updateProductVariantSchema = z.object({
+  id: z.string().optional(),
+  sku: z
+    .string()
+    .trim()
+    .min(1, 'SKU is required')
+    .max(64)
+    .regex(/^[A-Za-z0-9._-]+$/, 'SKU may contain letters, numbers, . _ -')
+    .optional(),
+  name: z.string().trim().max(100).optional().nullable(),
+  barcode: z.string().trim().max(64).optional().nullable(),
+  unit: z.enum(UNITS).optional(),
+  currency: z.enum(CURRENCIES).optional(),
+  costPrice: money.optional(),
+  sellPrice: money.optional(),
+  taxRatePct: z.number().min(0).max(100).optional(),
+  isActive: z.boolean().optional(),
+});
+
+export const updateProductSchema = z.object({
+  name: z.string().trim().min(1, 'Name is required').max(200).optional(),
+  description: z.string().trim().max(2000).optional().nullable(),
+  type: z.enum(PRODUCT_TYPES).optional(),
+  categoryId: z.string().optional().nullable(),
+  brandId: z.string().optional().nullable(),
+  isActive: z.boolean().optional(),
+  variants: z.array(updateProductVariantSchema).optional(),
+  modifierGroupIds: z.array(z.string()).optional(),
+});
+
+export type CreateProductVariantInput = z.infer<typeof createProductVariantSchema>;
+export type CreateProductInput = z.infer<typeof createProductSchema>;
+export type UpdateProductVariantInput = z.infer<typeof updateProductVariantSchema>;
+export type UpdateProductInput = z.infer<typeof updateProductSchema>;
+
+export const listProductsQuerySchema = z.object({
+  page: z.coerce.number().int().min(1).default(1),
+  limit: z.coerce.number().int().min(1).max(100).default(20),
+  search: z.string().trim().max(200).optional(),
+});
+
+export type ListProductsQuery = z.infer<typeof listProductsQuerySchema>;
+
+export interface ProductVariantDto {
+  id: string;
+  productId: string;
+  sku: string;
+  name: string | null;
+  barcode: string | null;
+  unit: Unit;
+  currency: Currency;
+  costPrice: number;
+  sellPrice: number;
+  taxRatePct: number;
+  marginPct: number;
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ProductImageDto {
+  id: string;
+  storageObjectId: string;
+  url: string;
+  thumbnailUrl?: string;
+  mediumUrl?: string;
+  largeUrl?: string;
+  syncStatus?: string;
+  isPrimary: boolean;
+  sortOrder: number;
+  altText: string | null;
+}
+
+export interface ProductDto {
+  id: string;
+  organizationId: string;
+  categoryId: string | null;
+  categoryName?: string | null;
+  brandId: string | null;
+  type: ProductType;
+  name: string;
+  description: string | null;
+  isActive: boolean;
+  imageUrl?: string | null;
+  thumbnailUrl?: string | null;
+  mediumUrl?: string | null;
+  largeUrl?: string | null;
+  syncStatus?: string | null;
+  variants: ProductVariantDto[];
+  images?: ProductImageDto[];
+  modifierGroups?: ModifierGroupDto[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CategoryDto {
+  id: string;
+  organizationId: string;
+  parentId: string | null;
+  name: string;
+  description: string | null;
+  slug?: string | null;
+  icon?: string | null;
+  imageUrl?: string | null;
+  level: number;
+  sortOrder: number;
+  isActive: boolean;
+  seoTitle?: string | null;
+  seoDescription?: string | null;
+  productCount: number;
+  breadcrumb: Array<{ id: string; name: string }>;
+  createdAt?: string;
+  childrenCount?: number;
+}
+
+export interface CategoryTreeNodeDto {
+  id: string;
+  organizationId: string;
+  parentId: string | null;
+  name: string;
+  description: string | null;
+  slug?: string | null;
+  icon?: string | null;
+  imageUrl?: string | null;
+  level: number;
+  sortOrder: number;
+  isActive: boolean;
+  productCount: number;
+  children: CategoryTreeNodeDto[];
+}
+
+export const createCategorySchema = z.object({
+  name: z.string().trim().min(1, 'Category name is required').max(100),
+  description: z.string().trim().max(500).optional().nullable(),
+  parentId: z.string().optional().nullable(),
+  slug: z.string().trim().max(120).optional().nullable(),
+  icon: z.string().trim().max(64).optional().nullable(),
+  imageUrl: z.string().trim().max(500).optional().nullable(),
+  seoTitle: z.string().trim().max(200).optional().nullable(),
+  seoDescription: z.string().trim().max(1000).optional().nullable(),
+  sortOrder: z.number().int().min(0).optional().nullable(),
+});
+
+export const updateCategorySchema = z.object({
+  name: z.string().trim().min(1, 'Category name is required').max(100).optional(),
+  description: z.string().trim().max(500).optional().nullable(),
+  parentId: z.string().optional().nullable(),
+  slug: z.string().trim().max(120).optional().nullable(),
+  icon: z.string().trim().max(64).optional().nullable(),
+  imageUrl: z.string().trim().max(500).optional().nullable(),
+  seoTitle: z.string().trim().max(200).optional().nullable(),
+  seoDescription: z.string().trim().max(1000).optional().nullable(),
+  sortOrder: z.number().int().min(0).optional().nullable(),
+  isActive: z.boolean().optional(),
+});
+
+export const reorderCategoriesSchema = z.object({
+  items: z.array(z.object({
+    id: z.string(),
+    sortOrder: z.number().int().min(0),
+  })).min(1),
+});
+
+export type CreateCategoryInput = z.infer<typeof createCategorySchema>;
+export type UpdateCategoryInput = z.infer<typeof updateCategorySchema>;
+export type ReorderCategoriesInput = z.infer<typeof reorderCategoriesSchema>;
+
+
+export interface ModifierOptionDto {
+  id: string;
+  groupId: string;
+  name: string;
+  priceAdjustment: number;
+  sortOrder: number;
+  isActive: boolean;
+}
+
+export interface ModifierGroupDto {
+  id: string;
+  organizationId: string;
+  name: string;
+  description?: string | null;
+  minSelections: number;
+  maxSelections: number;
+  isActive: boolean;
+  options: ModifierOptionDto[];
+}
+
+export const createModifierOptionSchema = z.object({
+  name: z.string().trim().min(1).max(100),
+  priceAdjustment: money.default(0),
+  sortOrder: z.number().int().min(0).default(0),
+  isActive: z.boolean().default(true),
+});
+
+export const createModifierGroupSchema = z.object({
+  name: z.string().trim().min(1).max(100),
+  description: z.string().trim().max(500).optional().nullable(),
+  minSelections: z.number().int().min(0).default(0),
+  maxSelections: z.number().int().min(1).default(1),
+  isActive: z.boolean().default(true),
+  options: z.array(createModifierOptionSchema).min(1, 'At least one option is required'),
+});
+
+export const updateModifierOptionSchema = createModifierOptionSchema.partial().extend({
+  id: z.string().optional(),
+});
+
+export const updateModifierGroupSchema = createModifierGroupSchema.partial().extend({
+  options: z.array(updateModifierOptionSchema).optional(),
+});
+
+export type CreateModifierGroupInput = z.infer<typeof createModifierGroupSchema>;
+export type UpdateModifierGroupInput = z.infer<typeof updateModifierGroupSchema>;

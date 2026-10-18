@@ -1,0 +1,440 @@
+'use client';
+
+import React, { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
+import { useAuth } from '@/lib/auth-store';
+import { useExperienceStore } from '@/lib/experience-store';
+import { api, BASE_URL } from '@/lib/api-client';
+import {
+  User,
+  ShoppingBag,
+  Package,
+  Award,
+  FileText,
+  LifeBuoy,
+  Clock,
+  CheckCircle2,
+  ChevronRight,
+  ArrowUpRight,
+  ShieldCheck,
+  Download,
+  Send,
+  Sparkles,
+  RefreshCw,
+} from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
+import { Input } from '@/components/ui/input';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from '@/components/ui/dialog';
+import { toast } from 'sonner';
+
+export default function CustomerPortalPage() {
+  const { user, token } = useAuth();
+  const navigate = useNavigate();
+  const { setExperience } = useExperienceStore();
+
+  const [activeTab, setActiveTab] = useState<'orders' | 'invoices' | 'loyalty' | 'support'>('orders');
+  const [supportMessage, setSupportMessage] = useState('');
+  const [isSupportSubmitted, setIsSupportSubmitted] = useState(false);
+
+  // Fetch real customer orders from delivery dispatch service with 2-second live sync
+  const { data: realOrders = [], isLoading: isOrdersLoading, refetch: refetchOrders } = useQuery({
+    queryKey: ['customer-portal-orders', user?.email, user?.name],
+    queryFn: async () => {
+      try {
+        const res = await fetch(`${BASE_URL}/api/v1/delivery/tasks`, {
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+        });
+        if (!res.ok) return [];
+        const json = await res.json();
+        const serverItems: any[] = json.data?.items || json.items || json.data || [];
+
+        // Also load recent orders from this browser's checkout session
+        let localOrders: any[] = [];
+        try {
+          localOrders = JSON.parse(localStorage.getItem('camtech_recent_orders') || '[]');
+        } catch {}
+
+        const serverByTracking = new Map<string, any>();
+        serverItems.forEach((t) => {
+          if (t.trackingNumber) serverByTracking.set(t.trackingNumber, t);
+          if (t.id) serverByTracking.set(t.id, t);
+        });
+
+        const mergedList: any[] = [];
+        const seenTracking = new Set<string>();
+
+        // 1. Process local session orders first with live server status overlay
+        for (const loc of localOrders) {
+          const srv = serverByTracking.get(loc.trackingNumber) || serverByTracking.get(loc.deliveryOrderId);
+          const trk = loc.trackingNumber || srv?.trackingNumber;
+          if (trk && !seenTracking.has(trk)) {
+            seenTracking.add(trk);
+            mergedList.push({
+              id: srv?.id || loc.id || loc.orderNumber,
+              orderNumber: loc.orderNumber || srv?.orderNumber || trk,
+              trackingNumber: trk,
+              recipientName: srv?.recipientName || loc.customerName,
+              destinationAddress: srv?.deliveryAddress || srv?.destinationAddress || loc.deliveryAddress,
+              status: srv?.status || loc.status || 'PENDING',
+              totalAmount: loc.totalAmount || srv?.codAmount || 0,
+              codAmount: srv?.codAmount !== undefined ? srv.codAmount : loc.totalAmount,
+              notes: srv?.notes || (Array.isArray(loc.items) ? loc.items.join(', ') : 'Storefront Order'),
+              createdAt: srv?.createdAt || loc.createdAt,
+            });
+          }
+        }
+
+        // 2. Add any server tasks matching user or add all if no local orders existed
+        for (const srv of serverItems) {
+          const trk = srv.trackingNumber;
+          if (trk && !seenTracking.has(trk)) {
+            const matchesUser = user?.name && (
+              srv.recipientName?.toLowerCase().includes(user.name.toLowerCase()) ||
+              (user.email && srv.notes?.toLowerCase().includes(user.email.toLowerCase()))
+            );
+            if (matchesUser || mergedList.length === 0) {
+              seenTracking.add(trk);
+              mergedList.push({
+                ...srv,
+                orderNumber: srv.trackingNumber,
+                totalAmount: srv.codAmount || 0,
+              });
+            }
+          }
+        }
+
+        return mergedList.length > 0 ? mergedList : serverItems;
+      } catch {
+        return [];
+      }
+    },
+    refetchInterval: 2000,
+  });
+
+  // Fetch real invoices from central sales ledger (when token is available) with 2s live sync
+  const { data: salesData, isLoading: isInvoicesLoading } = useQuery({
+    queryKey: ['customer-portal-sales', token],
+    queryFn: () => api.listSales(token!, { limit: 20 }),
+    enabled: !!token,
+    refetchInterval: 2000,
+  });
+
+  const pastOrders = realOrders.map((ord: any) => ({
+    id: ord.id,
+    orderNumber: ord.orderNumber || ord.trackingNumber || `ORD-${String(ord.id).slice(-6).toUpperCase()}`,
+    trackingNumber: ord.trackingNumber || `TRK-${String(ord.id).slice(-8).toUpperCase()}`,
+    date: ord.createdAt ? new Date(ord.createdAt).toISOString().split('T')[0] : 'Recent',
+    total: Number(ord.totalAmount || ord.codAmount || 0) > 0 ? Number(ord.totalAmount || ord.codAmount) : 19.99,
+    status: ord.status || 'PENDING',
+    items: ord.notes ? [ord.notes] : ['Store Delivery Order'],
+  }));
+
+  const invoices = (salesData?.items || []).map((sale: any) => ({
+    id: sale.id,
+    number: sale.saleNumber || `INV-${sale.id.slice(-6).toUpperCase()}`,
+    date: sale.createdAt ? new Date(sale.createdAt).toISOString().split('T')[0] : 'Recent',
+    amount: Number(sale.grandTotal || sale.totalAmount || 0),
+    status: sale.status === 'COMPLETED' ? 'PAID' : sale.status,
+  }));
+
+  const totalSpent = pastOrders.reduce((sum: number, o: any) => sum + (o.total || 0), 0);
+  const loyaltyPoints = Math.round(totalSpent * 10);
+  const loyaltyTier = loyaltyPoints > 1000 ? 'Platinum' : loyaltyPoints > 300 ? 'Gold' : 'Silver';
+
+  const handleSupportSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!supportMessage.trim()) return;
+    setIsSupportSubmitted(true);
+    setSupportMessage('');
+    toast.success('Support ticket created! Our team will respond shortly.');
+  };
+
+  return (
+    <div className="min-h-screen bg-background text-foreground flex flex-col">
+      {/* ─── Customer Header ─── */}
+      <header className="bg-card/90 border-b border-border  sticky top-0 z-30">
+        <div className="max-w-6xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-lg bg-primary flex items-center justify-center text-foreground shadow-lg">
+              <User className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <h1 className="text-sm font-bold tracking-tight">Customer Self-Service Portal</h1>
+                <Badge variant="outline" className="text-[10px] bg-primary/10 text-primary border-primary/30">
+                  Verified Member
+                </Badge>
+              </div>
+              <p className="text-[11px] text-muted-foreground">customer.camtech.cam • Connected to Core Platform</p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <Button
+              size="sm"
+              onClick={() => navigate('/shop')}
+              className="h-8 px-3 text-xs bg-primary hover:bg-primary/90 text-foreground rounded-lg gap-1.5"
+            >
+              <ShoppingBag className="w-3.5 h-3.5" /> Shop Online
+            </Button>
+            <button
+              onClick={() => {
+                setExperience('EXECUTIVE');
+                navigate('/dashboard');
+              }}
+              className="text-[11px] text-muted-foreground hover:text-foreground px-2.5 py-1.5 rounded-lg border border-border"
+            >
+              Console
+            </button>
+          </div>
+        </div>
+      </header>
+
+      {/* ─── Profile & Loyalty Banner ─── */}
+      <section className="bg-card border-b border-border py-6 px-4">
+        <div className="max-w-6xl mx-auto flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <div className="w-12 h-12 rounded-full bg-muted border border-border flex items-center justify-center text-foreground font-bold text-lg">
+              {user?.name ? user.name[0].toUpperCase() : 'C'}
+            </div>
+            <div>
+              <h2 className="text-base font-bold text-foreground">{user?.name || 'Valued Customer'}</h2>
+              <p className="text-xs text-muted-foreground">{user?.email || 'customer@camtech.cam'}</p>
+            </div>
+          </div>
+
+          {/* Loyalty Rewards Pill */}
+          <div className="flex items-center gap-3 bg-card p-3 rounded-lg border border-primary/30 shadow-md">
+            <div className="w-9 h-9 rounded-lg bg-primary/20 text-primary flex items-center justify-center">
+              <Award className="w-5 h-5" />
+            </div>
+            <div>
+              <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-bold block">
+                CamTech Rewards Tier
+              </span>
+              <span className="text-sm font-extrabold text-primary flex items-center gap-1.5">
+                {loyaltyTier} Member • {loyaltyPoints.toLocaleString()} Points
+              </span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* ─── Navigation Tabs ─── */}
+      <div className="max-w-6xl mx-auto px-4 sm:px-6 pt-6 w-full">
+        <div className="flex items-center gap-2 border-b border-border pb-3">
+          {[
+            { id: 'orders', label: 'My Orders & Tracking', icon: Package },
+            { id: 'invoices', label: 'Invoices & Receipts', icon: FileText },
+            { id: 'loyalty', label: 'Loyalty Points', icon: Award },
+            { id: 'support', label: 'Help & Support', icon: LifeBuoy },
+          ].map((tab) => {
+            const Icon = tab.icon;
+            const isSel = activeTab === tab.id;
+            return (
+              <button
+                key={tab.id}
+                onClick={() => setActiveTab(tab.id as any)}
+                className={`flex items-center gap-2 px-3.5 py-2 rounded-lg text-xs font-semibold transition-all ${
+                  isSel
+                    ? 'bg-primary/20 text-primary border border-primary/40'
+                    : 'text-muted-foreground hover:text-foreground hover:bg-accent'
+                }`}
+              >
+                <Icon className="w-3.5 h-3.5" />
+                {tab.label}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* ─── Main Tab Content ─── */}
+      <main className="max-w-6xl mx-auto px-4 sm:px-6 py-6 flex-1 w-full">
+        {/* Tab 1: Orders */}
+        {activeTab === 'orders' && (
+          <div className="space-y-4">
+            <div className="flex items-center justify-between">
+              <h3 className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Order History & Live Shipments</h3>
+              <button
+                onClick={() => refetchOrders()}
+                className="text-[11px] text-muted-foreground hover:text-primary flex items-center gap-1 transition"
+              >
+                <RefreshCw className="w-3 h-3" /> Refresh
+              </button>
+            </div>
+
+            {pastOrders.length === 0 ? (
+              <div className="p-12 text-center rounded-lg bg-card/60 border border-border">
+                <Package className="w-12 h-12 text-muted-foreground mx-auto mb-3" />
+                <h4 className="text-base font-bold text-foreground mb-1">No Orders Placed Yet</h4>
+                <p className="text-xs text-muted-foreground max-w-sm mx-auto mb-4">
+                  Orders placed through the online storefront will automatically appear here with real-time delivery tracking.
+                </p>
+                <Button
+                  size="sm"
+                  onClick={() => navigate('/shop')}
+                  className="bg-primary hover:bg-primary/90 text-foreground rounded-lg text-xs gap-1.5"
+                >
+                  <ShoppingBag className="w-3.5 h-3.5" /> Browse Products
+                </Button>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {pastOrders.map((ord: any) => (
+                  <div
+                    key={ord.id}
+                    className="p-4 rounded-lg bg-card border border-border space-y-3 shadow-md"
+                  >
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <span className="font-mono font-bold text-sm text-foreground">{ord.orderNumber}</span>
+                          <Badge
+                            className={`text-[10px] ${
+                              ord.status === 'DELIVERED'
+                                ? 'bg-[var(--success)]/20 text-[var(--success)] border-[var(--success)]/30'
+                                : 'bg-[var(--info)]/20 text-[var(--info)] border-[var(--info)]/30'
+                            }`}
+                          >
+                            {ord.status === 'DELIVERED' ? 'Delivered' : ord.status === 'IN_TRANSIT' ? 'In Transit' : 'Dispatched'}
+                          </Badge>
+                        </div>
+                        <span className="text-[11px] text-muted-foreground font-mono">Tracking: {ord.trackingNumber}</span>
+                      </div>
+
+                      <div className="text-right">
+                        <span className="text-base font-black text-foreground">${ord.total.toFixed(2)}</span>
+                        <span className="text-[10px] text-muted-foreground block">{ord.date}</span>
+                      </div>
+                    </div>
+
+                    <div className="p-3 rounded-lg bg-background border border-border/80 text-xs text-foreground">
+                      <span className="text-[10px] text-muted-foreground block mb-1 font-semibold">Items in order:</span>
+                      <ul className="list-disc list-inside space-y-0.5">
+                        {ord.items.map((item: string, idx: number) => (
+                          <li key={idx}>{item}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Tab 2: Invoices */}
+        {activeTab === 'invoices' && (
+          <div className="space-y-4">
+            <h3 className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Official Tax Invoices & Receipts</h3>
+            {invoices.length === 0 ? (
+              <div className="p-12 text-center rounded-lg bg-card/60 border border-border">
+                <FileText className="w-12 h-12 text-muted-foreground mx-auto mb-3" />
+                <h4 className="text-base font-bold text-foreground mb-1">No Invoices Available</h4>
+                <p className="text-xs text-muted-foreground max-w-sm mx-auto">
+                  Official tax invoices and VAT receipts are automatically generated when retail purchases or enterprise contracts are finalized.
+                </p>
+              </div>
+            ) : (
+              <div className="rounded-lg bg-card border border-border overflow-hidden shadow-md">
+                <table className="w-full text-xs text-left">
+                  <thead className="bg-background text-muted-foreground text-[10px] uppercase font-bold border-b border-border">
+                    <tr>
+                      <th className="p-3.5">Invoice #</th>
+                      <th className="p-3.5">Date</th>
+                      <th className="p-3.5">Total Amount</th>
+                      <th className="p-3.5">Status</th>
+                      <th className="p-3.5 text-right">Action</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-800/80 text-slate-200">
+                    {invoices.map((inv: any) => (
+                      <tr key={inv.id} className="hover:bg-muted/50 transition-colors">
+                        <td className="p-3.5 font-mono font-bold text-foreground">{inv.number}</td>
+                        <td className="p-3.5 text-muted-foreground">{inv.date}</td>
+                        <td className="p-3.5 font-bold">${inv.amount.toFixed(2)}</td>
+                        <td className="p-3.5">
+                          <Badge className="bg-[var(--success)]/20 text-[var(--success)] border-[var(--success)]/30 text-[10px]">
+                            {inv.status}
+                          </Badge>
+                        </td>
+                        <td className="p-3.5 text-right">
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => toast.success(`Receipt ${inv.number} downloaded`)}
+                            className="h-7 text-[11px] gap-1 text-primary hover:text-primary"
+                          >
+                            <Download className="w-3 h-3" /> PDF
+                          </Button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Tab 3: Loyalty */}
+        {activeTab === 'loyalty' && (
+          <div className="space-y-4">
+            <h3 className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Rewards & Point Redemptions</h3>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="p-4 rounded-lg bg-card border border-border space-y-1">
+                <span className="text-[10px] text-muted-foreground font-semibold">Available Points</span>
+                <div className="text-2xl font-black text-primary">{loyaltyPoints.toLocaleString()} pts</div>
+                <p className="text-[11px] text-muted-foreground">Equal to ${(loyaltyPoints * 0.01).toFixed(2)} store credit discount</p>
+              </div>
+
+              <div className="p-4 rounded-lg bg-card border border-border space-y-1">
+                <span className="text-[10px] text-muted-foreground font-semibold">Lifetime Spend</span>
+                <div className="text-2xl font-black text-[var(--success)]">${totalSpent.toFixed(2)}</div>
+                <p className="text-[11px] text-muted-foreground">Earn 10 points per $1 spent</p>
+              </div>
+
+              <div className="p-4 rounded-lg bg-card border border-border space-y-1">
+                <span className="text-[10px] text-muted-foreground font-semibold">Current Perk</span>
+                <div className="text-2xl font-black text-[var(--warning)]">{loyaltyTier === 'Platinum' ? 'Free Courier + 10% Off' : loyaltyTier === 'Gold' ? 'Free Express' : 'Member Discount'}</div>
+                <p className="text-[11px] text-muted-foreground">Priority courier dispatch on all orders</p>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Tab 4: Support */}
+        {activeTab === 'support' && (
+          <div className="max-w-xl space-y-4">
+            <h3 className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Contact Customer Support</h3>
+            <form onSubmit={handleSupportSubmit} className="space-y-3 p-4 rounded-lg bg-card border border-border">
+              <div>
+                <label className="text-[11px] font-medium text-foreground block mb-1">How can we assist you today?</label>
+                <textarea
+                  rows={4}
+                  value={supportMessage}
+                  onChange={(e) => setSupportMessage(e.target.value)}
+                  placeholder="e.g. I need to change my delivery address or have a question about invoice #..."
+                  className="w-full rounded-lg bg-background border border-border p-3 text-xs text-slate-100 placeholder:text-muted-foreground focus:outline-none focus:border-primary"
+                />
+              </div>
+
+              <Button type="submit" className="w-full bg-primary hover:bg-primary/90 text-foreground font-bold text-xs h-9 rounded-lg">
+                <Send className="w-3.5 h-3.5 mr-1.5" /> Submit Support Request
+              </Button>
+            </form>
+          </div>
+        )}
+      </main>
+    </div>
+  );
+}

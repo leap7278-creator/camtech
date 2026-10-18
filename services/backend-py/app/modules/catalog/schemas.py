@@ -1,0 +1,230 @@
+from pydantic import BaseModel
+from typing import Optional, List, Generic, TypeVar
+
+T = TypeVar("T")
+
+class PageMeta(BaseModel):
+    page: int = 1
+    limit: int = 50
+    total: int = 0
+    totalPages: int = 1
+
+class PaginatedResponse(BaseModel, Generic[T]):
+    items: List[T]
+    meta: PageMeta
+    total: Optional[int] = None
+
+class VariantDto(BaseModel):
+    id: str
+    productId: str
+    sku: str
+    name: Optional[str] = None
+    barcode: Optional[str] = None
+    unit: str = "piece"
+    currency: str = "USD"
+    costPrice: float = 0.0
+    sellPrice: float = 0.0
+    taxRatePct: float = 0.0
+    marginPct: float = 0.0
+    isActive: bool = True
+    createdAt: Optional[str] = None
+    updatedAt: Optional[str] = None
+
+class ProductImageDto(BaseModel):
+    id: str
+    storageObjectId: str
+    url: str
+    thumbnailUrl: Optional[str] = None
+    mediumUrl: Optional[str] = None
+    largeUrl: Optional[str] = None
+    syncStatus: Optional[str] = None
+    isPrimary: bool = False
+    sortOrder: int = 0
+    altText: Optional[str] = None
+
+class ProductDto(BaseModel):
+    id: str
+    organizationId: str
+    categoryId: Optional[str] = None
+    categoryName: Optional[str] = None
+    brandId: Optional[str] = None
+    type: str = "PHYSICAL"
+    name: str
+    description: Optional[str] = None
+    isActive: bool = True
+    imageUrl: Optional[str] = None
+    thumbnailUrl: Optional[str] = None
+    mediumUrl: Optional[str] = None
+    largeUrl: Optional[str] = None
+    syncStatus: Optional[str] = None
+    variants: List[VariantDto] = []
+    images: Optional[List[ProductImageDto]] = []
+    modifierGroups: Optional[List['ModifierGroupDto']] = []
+    createdAt: Optional[str] = None
+    updatedAt: Optional[str] = None
+
+class CreateVariantInput(BaseModel):
+    sku: str
+    name: Optional[str] = None
+    barcode: Optional[str] = None
+    unit: str = "piece"
+    currency: str = "USD"
+    costPrice: float = 0.0
+    sellPrice: float = 0.0
+    taxRatePct: float = 0.0
+    isActive: bool = True
+
+class CreateProductInput(BaseModel):
+    modifierGroupIds: Optional[List[str]] = []
+    name: str
+    description: Optional[str] = None
+    categoryId: Optional[str] = None
+    brandId: Optional[str] = None
+    type: Optional[str] = "PHYSICAL"
+    isActive: Optional[bool] = True
+    variants: List[CreateVariantInput] = []
+
+class UpdateVariantInput(BaseModel):
+    id: Optional[str] = None
+    sku: Optional[str] = None
+    name: Optional[str] = None
+    barcode: Optional[str] = None
+    unit: Optional[str] = None
+    currency: Optional[str] = None
+    costPrice: Optional[float] = None
+    sellPrice: Optional[float] = None
+    taxRatePct: Optional[float] = None
+    isActive: Optional[bool] = None
+
+class UpdateProductInput(BaseModel):
+    modifierGroupIds: Optional[List[str]] = None
+    name: Optional[str] = None
+    description: Optional[str] = None
+    categoryId: Optional[str] = None
+    brandId: Optional[str] = None
+    type: Optional[str] = None
+    isActive: Optional[bool] = None
+    variants: Optional[List[UpdateVariantInput]] = None
+
+class AddProductImageInput(BaseModel):
+    storageObjectId: str
+    isPrimary: bool = False
+    altText: Optional[str] = None
+
+class ReorderImagesInput(BaseModel):
+    imageIds: List[str]
+
+class BreadcrumbItem(BaseModel):
+    id: str
+    name: str
+
+class CategoryDto(BaseModel):
+    id: str
+    organizationId: str
+    parentId: Optional[str] = None
+    name: str
+    description: Optional[str] = None
+    slug: Optional[str] = None
+    icon: Optional[str] = None
+    imageUrl: Optional[str] = None
+    level: int = 0
+    sortOrder: int = 0
+    isActive: bool = True
+    seoTitle: Optional[str] = None
+    seoDescription: Optional[str] = None
+    productCount: int = 0
+    breadcrumb: List[BreadcrumbItem] = []
+    createdAt: Optional[str] = None
+    childrenCount: Optional[int] = 0
+
+class CategoryTreeNodeDto(BaseModel):
+    id: str
+    organizationId: str
+    parentId: Optional[str] = None
+    name: str
+    description: Optional[str] = None
+    slug: Optional[str] = None
+    icon: Optional[str] = None
+    imageUrl: Optional[str] = None
+    level: int = 0
+    sortOrder: int = 0
+    isActive: bool = True
+    productCount: int = 0
+    children: List['CategoryTreeNodeDto'] = []
+
+class CreateCategoryInput(BaseModel):
+    name: str
+    description: Optional[str] = None
+    parentId: Optional[str] = None
+    slug: Optional[str] = None
+    icon: Optional[str] = None
+    imageUrl: Optional[str] = None
+    seoTitle: Optional[str] = None
+    seoDescription: Optional[str] = None
+    sortOrder: Optional[int] = None
+
+class UpdateCategoryInput(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    parentId: Optional[str] = None
+    slug: Optional[str] = None
+    icon: Optional[str] = None
+    imageUrl: Optional[str] = None
+    seoTitle: Optional[str] = None
+    seoDescription: Optional[str] = None
+    sortOrder: Optional[int] = None
+    isActive: Optional[bool] = None
+
+class ReorderCategoryItem(BaseModel):
+    id: str
+    sortOrder: int
+
+class ReorderCategoriesInput(BaseModel):
+    items: List[ReorderCategoryItem]
+
+class ModifierOptionDto(BaseModel):
+    id: str
+    groupId: str
+    name: str
+    priceAdjustment: float = 0.0
+    sortOrder: int = 0
+    isActive: bool = True
+
+class ModifierGroupDto(BaseModel):
+    id: str
+    organizationId: str
+    name: str
+    description: Optional[str] = None
+    minSelections: int = 0
+    maxSelections: int = 1
+    isActive: bool = True
+    options: List[ModifierOptionDto] = []
+
+class CreateModifierOptionInput(BaseModel):
+    name: str
+    priceAdjustment: float = 0.0
+    sortOrder: int = 0
+    isActive: bool = True
+
+class CreateModifierGroupInput(BaseModel):
+    name: str
+    description: Optional[str] = None
+    minSelections: int = 0
+    maxSelections: int = 1
+    isActive: bool = True
+    options: List[CreateModifierOptionInput]
+
+class UpdateModifierOptionInput(BaseModel):
+    id: Optional[str] = None
+    name: Optional[str] = None
+    priceAdjustment: Optional[float] = None
+    sortOrder: Optional[int] = None
+    isActive: Optional[bool] = None
+
+class UpdateModifierGroupInput(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    minSelections: Optional[int] = None
+    maxSelections: Optional[int] = None
+    isActive: Optional[bool] = None
+    options: Optional[List[UpdateModifierOptionInput]] = None

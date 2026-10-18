@@ -1,0 +1,79 @@
+{
+  "name": "mystore-platform",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Universal Enterprise Business Platform — Phase 1 vertical slice (auth + product catalog)",
+  "packageManager": "pnpm@11.24.0",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "turbo run dev --filter=!@mystore/backend",
+    "dev:all": "turbo run dev --filter=!@mystore/backend",
+    "build": "turbo run build",
+    "lint": "turbo run lint",
+    "test": "turbo run test",
+    "test:e2e": "pnpm --filter @mystore/web test:e2e",
+    "preview": "pnpm --filter @mystore/web preview",
+    "typecheck": "turbo run typecheck --filter=!@mystore/backend --concurrency=2",
+    "audit:check": "python services/backend-py/scripts/schema_audit.py && pnpm typecheck",
+    "store:dev": "pnpm --filter @mystore/store dev",
+    "mini:dev": "pnpm --filter @mystore/mini dev",
+    "mini:build": "pnpm --filter @mystore/mini build",
+    "admin:dev": "pnpm --filter @mystore/web dev",
+    "cashier:dev": "pnpm --filter @mystore/cashier dev",
+    "delivery:dev": "pnpm --filter @mystore/delivery dev",
+    "hr:dev": "pnpm --filter @mystore/hr dev",
+    "ceo:dev": "pnpm --filter @mystore/ceo dev",
+    "backend:dev": "pnpm --filter @mystore/backend start:dev",
+    "backend:test": "pnpm --filter @mystore/backend test",
+    "backend:setup": "pnpm --filter @mystore/backend db:setup",
+    "web:dev": "pnpm --filter @mystore/web dev",
+    "py:dev": "python -m uvicorn app.main:app --app-dir services/backend-py --port 4000 --reload",
+    "py:test": "python -m pytest services/backend-py/tests",
+    "py:migrate": "python services/backend-py/scripts/auto_migrate.py",
+    "py:build:css": "cd services/backend-py && node ../../apps/web/node_modules/tailwindcss/lib/cli.js -c assets/tailwind.config.js -i assets/tailwind.css -o app/static/css/gateway.css --minify",
+    "ms:all": "concurrently -n \"gw,auth,catalog,sales,delivery,hr,finance,platform,bot,infra\" -c \"blue,green,yellow,magenta,cyan,white,red,gray,magentaBright,blueBright\" \"pnpm ms:gateway\" \"pnpm ms:auth\" \"pnpm ms:catalog\" \"pnpm ms:sales\" \"pnpm ms:delivery\" \"pnpm ms:hr\" \"pnpm ms:finance\" \"pnpm ms:platform\" \"pnpm ms:bot-builder\" \"pnpm ms:infra\"",
+    "ms:gateway": "python -m uvicorn app.microservices.gateway:gateway --app-dir services/backend-py --port 4000 --reload",
+    "ms:auth": "python -m uvicorn app.microservices.auth_service:app --app-dir services/backend-py --port 4001 --reload",
+    "ms:catalog": "python -m uvicorn app.microservices.catalog_service:app --app-dir services/backend-py --port 4002 --reload",
+    "ms:sales": "python -m uvicorn app.microservices.sales_service:app --app-dir services/backend-py --port 4003 --reload",
+    "ms:delivery": "python -m uvicorn app.microservices.delivery_service:app --app-dir services/backend-py --port 4004 --reload",
+    "ms:hr": "python -m uvicorn app.microservices.hr_service:app --app-dir services/backend-py --port 4005 --reload",
+    "ms:finance": "python -m uvicorn app.microservices.finance_service:app --app-dir services/backend-py --port 4006 --reload",
+    "ms:platform": "python -m uvicorn app.microservices.platform_service:app --app-dir services/backend-py --port 4007 --reload",
+    "ms:bot-builder": "python -m uvicorn app.microservices.bot_builder_service:app --app-dir services/backend-py --port 4008 --reload",
+    "ms:infra": "python -m uvicorn app.microservices.infra_service:app --app-dir services/backend-py --port 4009 --reload"
+
+  },
+  "devDependencies": {
+    "concurrently": "^10.0.5",
+    "turbo": "^2.3.3",
+    "typescript": "^5.7.2"
+  },
+  "overrides": {
+    "@nestjs/core": ">=11.1.18",
+    "lodash": ">=4.18.1",
+    "glob": ">=12.0.0",
+    "multer": ">=2.3.0",
+    "deepmerge-ts": ">=8.0.0",
+    "tmp": ">=0.2.6",
+    "js-yaml": ">=4.3.1",
+    "picomatch": ">=4.0.4",
+    "qs": ">=6.16.0",
+    "ajv": ">=8.18.0",
+    "file-type": ">=21.3.2",
+    "webpack": ">=5.104.1",
+    "body-parser": ">=1.20.6",
+    "brace-expansion": ">=1.1.21"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "@parcel/watcher",
+      "@prisma/engines",
+      "esbuild",
+      "prisma",
+      "unrs-resolver"
+    ]
+  }
+}

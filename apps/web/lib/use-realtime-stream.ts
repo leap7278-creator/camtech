@@ -1,0 +1,96 @@
+import { useEffect } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
+import { toast } from 'sonner';
+import { useAuth } from './auth-store';
+import { BASE_URL } from './api-client';
+
+/**
+ * 2026-2030 Standard Real-time Event Streaming Client Hook (SSE).
+ * Automatically subscribes to live enterprise events (sales, deliveries, approvals)
+ * and dispatches UI notifications and query cache invalidations.
+ */
+export function useRealtimeStream() {
+  const { token, user } = useAuth();
+  const queryClient = useQueryClient();
+
+  useEffect(() => {
+    if (!token || !user) return;
+
+    // SSE connection with Bearer token passed via query param or header
+    // In browsers standard EventSource doesn't support headers, so we pass token in URL
+    const streamUrl = `${BASE_URL}/api/v1/events/stream?token=${encodeURIComponent(token)}`;
+
+    let eventSource: EventSource | null = null;
+    try {
+      eventSource = new EventSource(streamUrl, { withCredentials: true });
+
+      eventSource.onmessage = (event) => {
+        try {
+          const payload = JSON.parse(event.data);
+          const type = payload.event;
+          const data = payload.data;
+
+          if (type === 'HEARTBEAT' || type === 'STREAM_CONNECTED') {
+            return;
+          }
+
+          // Handle Domain Events in Real-Time
+          if (type === 'SALE_COMPLETED') {
+            toast.success(`💰 New Sale #${data.saleNumber || 'ORD'}`, {
+              description: `Total: $${Number(data.totalAmount || 0).toFixed(2)}`,
+            });
+            queryClient.invalidateQueries({ queryKey: ['sales'] });
+            queryClient.invalidateQueries({ queryKey: ['reports'] });
+            queryClient.invalidateQueries({ queryKey: ['notificationStats'] });
+            queryClient.invalidateQueries({ queryKey: ['notificationsList'] });
+          } else if (type === 'ORDER_CREATED') {
+            toast.info(`📦 New Order #${data.saleNumber || 'ORD'}`, {
+              description: `${data.customerName || 'Customer'} placed an order (${data.itemCount || 1} items).`,
+            });
+            queryClient.invalidateQueries({ queryKey: ['sales'] });
+            queryClient.invalidateQueries({ queryKey: ['notificationStats'] });
+            queryClient.invalidateQueries({ queryKey: ['notificationsList'] });
+          } else if (type === 'NOTIFICATION_CREATED') {
+            toast.info(data.title || '🔔 New Notification', {
+              description: data.message || '',
+            });
+            queryClient.invalidateQueries({ queryKey: ['notificationStats'] });
+            queryClient.invalidateQueries({ queryKey: ['notificationsList'] });
+          } else if (type === 'DELIVERY_DISPATCHED') {
+            toast.info(`🚚 Courier Dispatched (${data.trackingNumber})`, {
+              description: `Order assigned to courier for delivery.`,
+            });
+            queryClient.invalidateQueries({ queryKey: ['delivery'] });
+            queryClient.invalidateQueries({ queryKey: ['notificationStats'] });
+          } else if (type === 'APPROVAL_REQUIRED') {
+            toast.warning(`✍️ Approval Request Pending`, {
+              description: data.title || 'New approval requires review.',
+            });
+            queryClient.invalidateQueries({ queryKey: ['approvals'] });
+            queryClient.invalidateQueries({ queryKey: ['notificationStats'] });
+          } else if (type === 'LOW_STOCK_ALERT') {
+            toast.error(`⚠️ Low Stock Alert: ${data.variantName || 'Item'}`, {
+              description: `Remaining: ${data.stock} units (Threshold: ${data.threshold})`,
+            });
+            queryClient.invalidateQueries({ queryKey: ['inventory'] });
+            queryClient.invalidateQueries({ queryKey: ['notificationStats'] });
+          }
+        } catch {
+          // Non-JSON frame (e.g. heartbeat)
+        }
+      };
+
+      eventSource.onerror = () => {
+        // SSE handles reconnection automatically
+      };
+    } catch {
+      // Graceful fallback if SSE is blocked by proxy
+    }
+
+    return () => {
+      if (eventSource) {
+        eventSource.close();
+      }
+    };
+  }, [token, user, queryClient]);
+}

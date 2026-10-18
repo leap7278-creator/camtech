@@ -1,0 +1,193 @@
+import pytest
+from httpx import AsyncClient, ASGITransport
+from app.main import app
+from app.core.dependencies import get_current_user, TenantUser
+
+class MockUser:
+    def __init__(self):
+        self.id = "usr_test_ceo"
+        self.organization_id = "cmtk8h18o0000vkd0etmdacgw"
+        self.email = "ceo@mystore.test"
+        self.name = "Test CEO"
+        self.roles = '["SUPER_ADMIN", "ORG_ADMIN"]'
+        self.location_id = None
+
+@pytest.fixture
+def mock_tenant_user():
+    user = MockUser()
+    tenant_user = TenantUser(user=user, roles=["SUPER_ADMIN", "ORG_ADMIN"])
+    app.dependency_overrides[get_current_user] = lambda: tenant_user
+    yield tenant_user
+    app.dependency_overrides.pop(get_current_user, None)
+
+@pytest.fixture
+async def mock_storage_provider(mock_tenant_user):
+    from app.core.database import AsyncSessionLocal
+    from app.modules.storage.models import StorageProvider
+    import uuid
+    from sqlalchemy import select
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            select(StorageProvider).where(StorageProvider.organization_id == mock_tenant_user.organization_id)
+        )
+        provider = result.scalars().first()
+
+        mock_config = {
+            "bucket_name": "test-bucket", 
+            "endpoint_url": "http://localhost:9000",
+            "access_key": "test_access_key",
+            "secret_key": "test_secret_key"
+        }
+
+        if not provider:
+            provider = StorageProvider(
+                id=str(uuid.uuid4()),
+                organization_id=mock_tenant_user.organization_id,
+                name="Test Local S3",
+                type="LOCAL_S3",
+                is_default=True,
+                configuration=mock_config
+            )
+            session.add(provider)
+        else:
+            provider.configuration = mock_config
+
+        await session.commit()
+        yield provider
+
+@pytest.mark.asyncio
+async def test_payroll_calculation_modular_route(mock_tenant_user):
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        payload = {
+            "baseSalary": 3000.0,
+            "allowances": 500.0,
+            "deductions": 200.0,
+            "taxRatePct": 10.0
+        }
+        resp = await client.post("/api/v1/hr/payroll/calculate", json=payload)
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["success"] is True
+        data = body["data"]
+        assert data["baseSalary"] == 3000.0
+        assert data["grossPay"] == 3500.0
+        assert data["taxAmount"] == 330.0
+        assert data["netPay"] == 2970.0
+
+@pytest.mark.asyncio
+async def test_tax_calculation_modular_route(mock_tenant_user):
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        payload = {
+            "amount": 100.0,
+            "ratePct": 10.0,
+            "isInclusive": False
+        }
+        resp = await client.post("/api/v1/taxes/calculate", json=payload)
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["success"] is True
+        data = body["data"]
+        assert data["taxAmount"] == 10.0
+        assert data["totalAmount"] == 110.0
+
+@pytest.mark.asyncio
+async def test_promotions_evaluate_modular_route(mock_tenant_user):
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        payload = {
+            "type": "PERCENTAGE",
+            "value": 20.0,
+            "cartTotal": 200.0,
+            "minSpend": 50.0
+        }
+        resp = await client.post("/api/v1/promotions/evaluate", json=payload)
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["success"] is True
+        data = body["data"]
+        assert data["applicable"] is True
+        assert data["discount"] == 40.0
+        assert data["finalTotal"] == 160.0
+
+@pytest.mark.asyncio
+async def test_pricing_resolve_modular_route(mock_tenant_user):
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        payload = {
+            "basePrice": 100.0,
+            "customerTier": "WHOLESALE",
+            "quantity": 10
+        }
+        resp = await client.post("/api/v1/pricing/resolve", json=payload)
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["success"] is True
+        data = body["data"]
+        assert data["resolvedPrice"] > 0
+        assert data["quantity"] == 10
+        assert "lines" in data
+        assert len(data["lines"]) >= 1
+
+        # Test batch lines resolution contract (ResolvePricesInput / ResolvedPricesResultDto)
+        batch_payload = {
+            "customerId": None,
+            "lines": [
+                {"productVariantId": "test-var-1", "quantity": 2},
+                {"productVariantId": "test-var-2", "quantity": 15}
+            ]
+        }
+        batch_resp = await client.post("/api/v1/pricing/resolve", json=batch_payload)
+        assert batch_resp.status_code == 200
+        batch_body = batch_resp.json()
+        assert batch_body["success"] is True
+        batch_data = batch_body["data"]
+        assert "lines" in batch_data
+        assert len(batch_data["lines"]) == 2
+        assert batch_data["lines"][0]["productVariantId"] == "test-var-1"
+        assert batch_data["lines"][1]["productVariantId"] == "test-var-2"
+        assert batch_data["lines"][1]["priceSource"] == "VOLUME_TIER"
+
+@pytest.mark.asyncio
+async def test_storage_upload_intent_modular_route(mock_tenant_user, mock_storage_provider):
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        payload = {"fileName": "invoice_receipt.pdf", "mimeType": "application/pdf", "byteSize": 10240}
+        resp = await client.post("/api/v1/storage/upload-intent", json=payload)
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["success"] is True
+        data = body["data"]
+        assert "uploadUrl" in data
+        assert "objectId" in data
+
+@pytest.mark.asyncio
+async def test_storage_stats_modular_route(mock_tenant_user):
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.get("/api/v1/storage/stats")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["success"] is True
+        data = body["data"]
+        assert "totalFiles" in data
+        assert "totalBytes" in data
+        assert "activeStorageDriver" in data
+        assert isinstance(data["totalFiles"], int)
+        assert isinstance(data["totalBytes"], int)
+
+@pytest.mark.asyncio
+async def test_reporting_dashboard_modular_route(mock_tenant_user):
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.get("/api/v1/reports/dashboard")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["success"] is True
+        data = body["data"]
+        assert data["period"]["label"] == "Last 30 days"
+        assert data["currency"] == "USD"
+        assert data["timezone"] == "UTC"
+        assert set(data["metrics"]) == {"revenue", "orders", "averageOrderValue", "customers"}
+        assert data["metrics"]["orders"]["value"] >= 0
+        assert "previousValue" in data["metrics"]["revenue"]
+        assert "changePct" in data["metrics"]["revenue"]
+        assert "lowStockItemCount" in data["inventory"]
+        assert isinstance(data["timeSeries"], list)
+        assert isinstance(data["branches"], list)
+        assert isinstance(data["alerts"], list)
+        assert data["generatedAt"].endswith("Z")

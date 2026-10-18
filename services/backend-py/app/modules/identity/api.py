@@ -1,0 +1,639 @@
+import json
+import time
+import asyncio
+import uuid
+from fastapi import APIRouter, Depends, HTTPException, status, Request
+from app.core.rate_limiter import auth_rate_limiter
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, or_, func, delete
+from sqlalchemy.orm import selectinload
+
+from app.core.database import get_db
+from app.core.security import (
+    verify_password, hash_password, create_access_token, create_refresh_token,
+    decode_refresh_token, generate_totp_secret, verify_totp_code,
+    get_totp_uri
+)
+from app.core.dependencies import get_current_user, TenantUser, RequirePermissions
+from app.domain.registration_worker import dispatch_user_registered_event
+
+from typing import List
+from .models import User, Role, UserRole
+from .schemas import (
+    LoginRequest, LoginResponse, RefreshTokenRequest, TokenResponse,
+    RegisterRequest, RegisterResponse, UserDto, OAuthSyncRequest,
+    CreateUserInput, UpdateUserInput, UserDetailDto
+)
+
+router = APIRouter(tags=["Auth"])
+
+@router.post("/register", response_model=RegisterResponse, status_code=status.HTTP_201_CREATED)
+async def register(req: RegisterRequest, request: Request, db: AsyncSession = Depends(get_db)):
+    await auth_rate_limiter.check(request)
+    """
+    Ultra-Low Latency Non-Blocking Registration:
+    1. Fast DB check & async threadpool bcrypt hash (never blocks event loop)
+    2. Drops UserRegistered event into Redis Queue
+    3. Returns 201 Created in ~10-15ms while workers provision loyalty & coupons asynchronously!
+    """
+    t0 = time.time()
+    # 1. Check existing user
+    result = await db.execute(select(User).where(User.email == req.email))
+    if result.scalar_one_or_none():
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="User with this email already exists"
+        )
+
+    # 2. Async non-blocking password hash
+    password_hash = await asyncio.to_thread(hash_password, req.password)
+    user_id = f"usr_{uuid.uuid4().hex[:10]}"
+    
+    # Get active organization id
+    org_res = await db.execute(select(User.organization_id).limit(1))
+    org_id = org_res.scalar_one_or_none() or "cmtk8h18o0000vkd0etmdacgw"
+    roles = [req.role.upper()] if req.role else ["CUSTOMER"]
+
+    # 3. Create user record
+    new_user = User(
+        id=user_id,
+        organization_id=org_id,
+        email=req.email,
+        name=req.name,
+        password_hash=password_hash,
+        is_active=True,
+        roles=json.dumps(roles)
+    )
+    db.add(new_user)
+    # Synchronize relational user_roles
+    for r in roles:
+        r_obj = (await db.execute(select(Role).where(Role.name == r, or_(Role.organization_id == org_id, Role.is_system == True)))).scalars().first()
+        if not r_obj:
+            r_obj = Role(id=f"rol_{uuid.uuid4().hex[:10]}", name=r, description=f"{r} role", organization_id=org_id, permissions=[], is_system=False)
+            db.add(r_obj)
+            await db.flush()
+        db.add(UserRole(user_id=user_id, role_id=r_obj.id, role_name=r_obj.name))
+    await db.commit()
+
+    # 4. Asynchronous Event-Driven Decoupling: Drop event into Redis & Queue
+    event_id = await dispatch_user_registered_event({
+        "id": user_id,
+        "email": req.email,
+        "name": req.name,
+        "organizationId": org_id,
+        "roles": roles
+    })
+
+    # 5. Issue immediate access token
+    access_token = create_access_token({"sub": user_id, "orgId": org_id, "roles": roles})
+    latency_ms = (time.time() - t0) * 1000
+
+    return RegisterResponse(
+        id=user_id,
+        email=req.email,
+        name=req.name,
+        organizationId=org_id,
+        roles=roles,
+        accessToken=access_token,
+        status="PROVISIONED",
+        message="User registered successfully. Welcome coupon & loyalty points queued in Redis.",
+        latencyMs=round(latency_ms, 2),
+        queuedEventId=event_id
+    )
+
+
+# Constant-time dummy hash to mitigate user enumeration timing attacks
+_DUMMY_BCRYPT_HASH = "$2b$12$e8uq5eZ5h5W5w7m7q7m7qu7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7"
+
+@router.post("/login", response_model=LoginResponse)
+async def login(req: LoginRequest, request: Request, db: AsyncSession = Depends(get_db)):
+    await auth_rate_limiter.check(request)
+    from sqlalchemy import or_, func
+    login_val = req.email.strip().lower()
+    result = await db.execute(
+        select(User).where(
+            or_(
+                func.lower(User.email) == login_val,
+                func.lower(User.name) == login_val
+            )
+        )
+    )
+    user = result.scalar_one_or_none()
+
+    # Constant-time verification: always perform bcrypt hash check even if user is not found
+    hash_to_verify = user.password_hash if user else _DUMMY_BCRYPT_HASH
+    is_valid = await asyncio.to_thread(verify_password, req.password, hash_to_verify)
+
+    if not user or not is_valid:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid email or password",
+        )
+
+    roles = json.loads(user.roles) if isinstance(user.roles, str) else (user.roles or ["CASHIER"])
+    token = create_access_token({"sub": user.id, "orgId": user.organization_id, "roles": roles})
+    refresh_token = create_refresh_token({"sub": user.id, "orgId": user.organization_id})
+
+    permissions = [
+        "products.read", "products.write", "customers.read", "customers.write",
+        "sales.read", "sales.write", "sales.void", "sales.refund",
+        "inventory.read", "inventory.adjust", "locations.read", "locations.write",
+        "organizations.read", "organizations.write", "procurement.read", "procurement.write",
+        "promotions.read", "promotions.write", "pricing.read", "pricing.write",
+        "payments.read", "taxes.read", "taxes.write", "loyalty.read", "loyalty.write",
+        "storage.read", "storage.write", "notifications.read", "notifications.write",
+        "reports.read", "reports.export", "finance.read", "finance.write", "journal.post",
+        "workflow.read", "workflow.manage", "workflow.approve", "hr.read", "hr.write",
+        "payroll.run", "assets.read", "assets.write", "projects.read", "projects.write",
+        "tickets.read", "tickets.write", "developer.read", "developer.write",
+        "webhooks.manage", "telegram.manage", "automation.read", "automation.write", "automation.execute"
+    ]
+
+    return LoginResponse(
+        accessToken=token,
+        refreshToken=refresh_token,
+        user=UserDto(
+            id=user.id,
+            organizationId=user.organization_id,
+            email=user.email,
+            name=user.name,
+            roles=roles,
+            permissions=permissions,
+            locationId=user.location_id
+        )
+    )
+
+@router.post("/oauth-sync", response_model=LoginResponse)
+async def oauth_sync(req: OAuthSyncRequest, request: Request, db: AsyncSession = Depends(get_db)):
+    await auth_rate_limiter.check(request)
+    if not req.email or "@" not in req.email:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Valid email is required for OAuth synchronization"
+        )
+
+    # 1. Lookup user in local PostgreSQL
+    result = await db.execute(select(User).where(User.email == req.email))
+    user = result.scalar_one_or_none()
+
+    if not user:
+        # Determine organization id from existing database
+        org_res = await db.execute(select(User.organization_id).limit(1))
+        org_id = org_res.scalar_one_or_none()
+        if not org_id:
+            from app.models.entities import Organization
+            org_lookup = await db.execute(select(Organization.id).limit(1))
+            org_id = org_lookup.scalar_one_or_none() or "cmtn25rqc0000vk64wgyfvaov"
+
+        user_id = f"usr_{uuid.uuid4().hex[:10]}"
+        roles = ["ORG_ADMIN"]
+        dummy_hash = await asyncio.to_thread(hash_password, uuid.uuid4().hex)
+
+        user = User(
+            id=user_id,
+            organization_id=org_id,
+            email=req.email,
+            name=req.name or req.email.split("@")[0],
+            password_hash=dummy_hash,
+            roles=json.dumps(roles),
+            is_active=True
+        )
+        db.add(user)
+        await db.commit()
+        await db.refresh(user)
+    else:
+        if req.name and user.name != req.name:
+            user.name = req.name
+            await db.commit()
+            await db.refresh(user)
+
+    roles = json.loads(user.roles) if isinstance(user.roles, str) else (user.roles or ["ORG_ADMIN"])
+    token = create_access_token({"sub": user.id, "orgId": user.organization_id, "roles": roles})
+    refresh_token = create_refresh_token({"sub": user.id, "orgId": user.organization_id})
+
+    permissions = [
+        "products.read", "products.write", "customers.read", "customers.write",
+        "sales.read", "sales.write", "sales.void", "sales.refund",
+        "inventory.read", "inventory.adjust", "locations.read", "locations.write",
+        "organizations.read", "organizations.write", "procurement.read", "procurement.write",
+        "promotions.read", "promotions.write", "pricing.read", "pricing.write",
+        "payments.read", "taxes.read", "taxes.write", "loyalty.read", "loyalty.write",
+        "storage.read", "storage.write", "notifications.read", "notifications.write",
+        "reports.read", "reports.export", "finance.read", "finance.write", "journal.post",
+        "workflow.read", "workflow.manage", "workflow.approve", "hr.read", "hr.write",
+        "payroll.run", "assets.read", "assets.write", "projects.read", "projects.write",
+        "tickets.read", "tickets.write", "developer.read", "developer.write",
+        "webhooks.manage", "telegram.manage", "automation.read", "automation.write", "automation.execute"
+    ]
+
+    return LoginResponse(
+        accessToken=token,
+        refreshToken=refresh_token,
+        user=UserDto(
+            id=user.id,
+            organizationId=user.organization_id,
+            email=user.email,
+            name=user.name,
+            roles=roles,
+            permissions=permissions,
+            locationId=user.location_id
+        )
+    )
+
+@router.post("/refresh", response_model=TokenResponse)
+async def refresh_token(req: RefreshTokenRequest, request: Request, db: AsyncSession = Depends(get_db)):
+    await auth_rate_limiter.check(request)
+    payload = decode_refresh_token(req.refreshToken)
+    if not payload or "sub" not in payload:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired refresh token",
+        )
+
+    user_id = payload["sub"]
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="User not found",
+        )
+
+    roles = json.loads(user.roles) if isinstance(user.roles, str) else (user.roles or ["CASHIER"])
+    new_access_token = create_access_token({"sub": user.id, "orgId": user.organization_id, "roles": roles})
+    new_refresh_token = create_refresh_token({"sub": user.id, "orgId": user.organization_id})
+
+    return TokenResponse(
+        accessToken=new_access_token,
+        refreshToken=new_refresh_token,
+        tokenType="bearer"
+    )
+
+@router.post("/mfa/setup")
+async def mfa_setup(user: TenantUser = Depends(get_current_user)):
+    secret = generate_totp_secret()
+    uri = get_totp_uri(secret, user.email, issuer="MyStore")
+    return {
+        "secret": secret,
+        "otpauthUri": uri,
+        "instructions": "Scan QR code or enter secret in Google Authenticator or 1Password"
+    }
+
+@router.post("/mfa/verify")
+async def mfa_verify(
+    payload: dict,
+    user: TenantUser = Depends(get_current_user)
+):
+    secret = payload.get("secret", "")
+    code = payload.get("code", "")
+    if not secret or not code:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Both secret and code are required",
+        )
+    is_valid = verify_totp_code(secret, code)
+    return {"valid": is_valid}
+
+@router.get("/me", response_model=UserDto)
+async def get_me(user: TenantUser = Depends(get_current_user)):
+    permissions = [
+        "products.read", "products.write", "customers.read", "customers.write",
+        "sales.read", "sales.write", "inventory.read", "inventory.adjust",
+        "locations.read", "reports.read", "automation.read", "automation.write"
+    ]
+    return UserDto(
+        id=user.id,
+        organizationId=user.organization_id,
+        email=user.email,
+        name=user.name,
+        roles=user.roles,
+        permissions=permissions,
+        locationId=user.location_id
+    )
+
+# ==============================================================================
+# USER & ACCESS CONTROL MANAGEMENT (Spec §12, §68)
+# ==============================================================================
+
+@router.get("/users", response_model=List[UserDetailDto])
+async def list_users(
+    user: TenantUser = Depends(RequirePermissions(["users:read"])),
+    db: AsyncSession = Depends(get_db)
+):
+    """List all users/staff in the organization. Requires admin access."""
+    
+    stmt = select(User).options(
+        selectinload(User.user_roles).selectinload(UserRole.role)
+    ).where(User.organization_id == user.organization_id).order_by(User.created_at.desc())
+    res = await db.execute(stmt)
+    users = res.scalars().all()
+    
+    out = []
+    for u in users:
+        if u.user_roles:
+            roles_list = [ur.role.name for ur in u.user_roles if ur.role]
+        else:
+            roles_list = json.loads(u.roles) if isinstance(u.roles, str) else (u.roles or [])
+        out.append(UserDetailDto(
+            id=u.id,
+            organizationId=u.organization_id,
+            email=u.email,
+            name=u.name or u.email,
+            roles=roles_list,
+            isActive=bool(u.is_active),
+            locationId=u.location_id,
+            createdAt=u.created_at.isoformat() if u.created_at else None
+        ))
+    return out
+
+@router.post("/users", response_model=UserDetailDto, status_code=status.HTTP_201_CREATED)
+async def create_user(
+    inp: CreateUserInput,
+    user: TenantUser = Depends(RequirePermissions(["users:write"])),
+    db: AsyncSession = Depends(get_db)
+):
+    """Create a new staff user. Requires admin access."""
+    
+    # Check if email exists
+    exist = (await db.execute(select(User).where(User.email == inp.email))).scalar_one_or_none()
+    if exist:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"User with email '{inp.email}' already exists"
+        )
+    
+    pwd_hash = await asyncio.to_thread(hash_password, inp.password)
+    user_id = f"usr_{uuid.uuid4().hex[:10]}"
+    roles = [r.upper() for r in inp.roles] if inp.roles else ["STAFF"]
+    
+    # Only SUPER_ADMIN can create another SUPER_ADMIN
+    if "SUPER_ADMIN" in roles and "SUPER_ADMIN" not in user.roles:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only existing SUPER_ADMIN can grant the SUPER_ADMIN role"
+        )
+
+    new_user = User(
+        id=user_id,
+        organization_id=user.organization_id,
+        email=inp.email,
+        name=inp.name,
+        password_hash=pwd_hash,
+        roles=json.dumps(roles),
+        location_id=inp.locationId,
+        is_active=True
+    )
+    db.add(new_user)
+    # Synchronize relational user_roles
+    for r in roles:
+        r_obj = (await db.execute(select(Role).where(Role.name == r, or_(Role.organization_id == user.organization_id, Role.is_system == True)))).scalars().first()
+        if not r_obj:
+            r_obj = Role(id=f"rol_{uuid.uuid4().hex[:10]}", name=r, description=f"{r} role", organization_id=user.organization_id, permissions=[], is_system=False)
+            db.add(r_obj)
+            await db.flush()
+        db.add(UserRole(user_id=user_id, role_id=r_obj.id, role_name=r_obj.name))
+    await db.commit()
+    await db.refresh(new_user)
+    
+    return UserDetailDto(
+        id=new_user.id,
+        organizationId=new_user.organization_id,
+        email=new_user.email,
+        name=new_user.name,
+        roles=roles,
+        isActive=bool(new_user.is_active),
+        locationId=new_user.location_id,
+        createdAt=new_user.created_at.isoformat() if new_user.created_at else None
+    )
+
+@router.patch("/users/{target_user_id}", response_model=UserDetailDto)
+async def update_user(
+    target_user_id: str,
+    inp: UpdateUserInput,
+    user: TenantUser = Depends(RequirePermissions(["users:write"])),
+    db: AsyncSession = Depends(get_db)
+):
+    """Update user roles, status, or reset password."""
+    
+    target = (await db.execute(select(User).where(User.id == target_user_id, User.organization_id == user.organization_id))).scalar_one_or_none()
+    if not target:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+    
+    if inp.name is not None:
+        target.name = inp.name
+    if inp.roles is not None:
+        roles = [r.upper() for r in inp.roles]
+        if "SUPER_ADMIN" in roles and "SUPER_ADMIN" not in user.roles:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Only existing SUPER_ADMIN can grant the SUPER_ADMIN role"
+            )
+        target.roles = json.dumps(roles)
+        # Synchronize relational user_roles
+        await db.execute(delete(UserRole).where(UserRole.user_id == target.id))
+        for r in roles:
+            r_obj = (await db.execute(select(Role).where(
+                Role.name == r,
+                or_(Role.organization_id == user.organization_id, Role.is_system == True)
+            ))).scalars().first()
+            if not r_obj:
+                r_obj = Role(id=f"rol_{uuid.uuid4().hex[:10]}", name=r, description=f"{r} role", organization_id=user.organization_id, permissions=[], is_system=False)
+                db.add(r_obj)
+                await db.flush()
+            db.add(UserRole(user_id=target.id, role_id=r_obj.id, role_name=r_obj.name))
+    if inp.isActive is not None:
+        target.is_active = inp.isActive
+    if inp.locationId is not None:
+        target.location_id = inp.locationId
+    if inp.password:
+        target.password_hash = await asyncio.to_thread(hash_password, inp.password)
+    
+    await db.commit()
+    await db.refresh(target)
+    
+    roles_list = json.loads(target.roles) if isinstance(target.roles, str) else (target.roles or [])
+    return UserDetailDto(
+        id=target.id,
+        organizationId=target.organization_id,
+        email=target.email,
+        name=target.name or target.email,
+        roles=roles_list,
+        isActive=bool(target.is_active),
+        locationId=target.location_id,
+        createdAt=target.created_at.isoformat() if target.created_at else None
+    )
+
+@router.delete("/users/{target_user_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_user(
+    target_user_id: str,
+    user: TenantUser = Depends(RequirePermissions(["users:write"])),
+    db: AsyncSession = Depends(get_db)
+):
+    """Deactivate or delete user."""
+    
+    target = (await db.execute(select(User).where(User.id == target_user_id, User.organization_id == user.organization_id))).scalar_one_or_none()
+    if not target:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+    
+    if target.id == user.id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot deactivate your own account")
+    
+    target.is_active = False
+    await db.commit()
+    return {"success": True, "message": f"User '{target.email}' deactivated successfully"}
+
+
+
+# ==============================================================================
+# ROLES & PERMISSIONS MANAGEMENT
+# ==============================================================================
+from .schemas import RoleDto, CreateRoleInput, UpdateRoleInput
+
+@router.get("/roles", response_model=List[RoleDto])
+async def list_roles(
+    user: TenantUser = Depends(RequirePermissions(["users:read"])),
+    db: AsyncSession = Depends(get_db)
+):
+    """List all system roles + organization custom roles."""
+    stmt = select(Role).where(
+        or_(
+            Role.organization_id == user.organization_id,
+            Role.is_system == True
+        )
+    ).order_by(Role.name)
+    res = await db.execute(stmt)
+    roles = res.scalars().all()
+    
+    return [
+        RoleDto(
+            id=r.id,
+            organizationId=r.organization_id,
+            name=r.name,
+            description=r.description,
+            permissions=r.permissions if isinstance(r.permissions, list) else (json.loads(r.permissions) if isinstance(r.permissions, str) else []),
+            isSystem=bool(r.is_system)
+        )
+        for r in roles
+    ]
+
+@router.post("/roles", response_model=RoleDto, status_code=status.HTTP_201_CREATED)
+async def create_role(
+    inp: CreateRoleInput,
+    user: TenantUser = Depends(RequirePermissions(["users:write"])),
+    db: AsyncSession = Depends(get_db)
+):
+    """Create a new custom role."""
+    # Check if a role with same name exists for this org
+    exist = (await db.execute(select(Role).where(
+        Role.name == inp.name,
+        Role.organization_id == user.organization_id
+    ))).scalar_one_or_none()
+    if exist:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Role with name '{inp.name}' already exists"
+        )
+    
+    new_role = Role(
+        id=f"rol_{uuid.uuid4().hex[:10]}",
+        organization_id=user.organization_id,
+        name=inp.name,
+        description=inp.description,
+        permissions=inp.permissions,
+        is_system=False
+    )
+    db.add(new_role)
+    await db.commit()
+    await db.refresh(new_role)
+    
+    return RoleDto(
+        id=new_role.id,
+        organizationId=new_role.organization_id,
+        name=new_role.name,
+        description=new_role.description,
+        permissions=new_role.permissions,
+        isSystem=bool(new_role.is_system)
+    )
+
+@router.patch("/roles/{role_id}", response_model=RoleDto)
+async def update_role(
+    role_id: str,
+    inp: UpdateRoleInput,
+    user: TenantUser = Depends(RequirePermissions(["users:write"])),
+    db: AsyncSession = Depends(get_db)
+):
+    """Update custom role permissions."""
+    role = (await db.execute(select(Role).where(Role.id == role_id))).scalar_one_or_none()
+    if not role:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Role not found")
+        
+    if role.is_system:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cannot modify system roles")
+        
+    if role.organization_id != user.organization_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to modify this role")
+    
+    if inp.name is not None:
+        role.name = inp.name
+    if inp.description is not None:
+        role.description = inp.description
+    if inp.permissions is not None:
+        role.permissions = inp.permissions
+        
+    await db.commit()
+    await db.refresh(role)
+    
+    return RoleDto(
+        id=role.id,
+        organizationId=role.organization_id,
+        name=role.name,
+        description=role.description,
+        permissions=role.permissions if isinstance(role.permissions, list) else json.loads(role.permissions),
+        isSystem=bool(role.is_system)
+    )
+
+@router.delete("/roles/{role_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_role(
+    role_id: str,
+    user: TenantUser = Depends(RequirePermissions(["users:write"])),
+    db: AsyncSession = Depends(get_db)
+):
+    """Delete custom role."""
+    role = (await db.execute(select(Role).where(Role.id == role_id))).scalar_one_or_none()
+    if not role:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Role not found")
+        
+    if role.is_system:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cannot delete system roles")
+        
+    if role.organization_id != user.organization_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to delete this role")
+        
+    await db.delete(role)
+    await db.commit()
+    return {"success": True}
+
+
+# Passkey (WebAuthn) routes live in their own module but mount under the same
+# /api/v1/auth prefix, so both the monolith and the auth microservice expose
+# them without either having to know about the split.
+from .passkey_api import router as passkey_router  # noqa: E402
+
+router.include_router(passkey_router)
+
+
+
+@router.get("/permissions", summary="Authoritative permission catalogue for the role editor")
+async def list_permission_catalog(
+    user: TenantUser = Depends(RequirePermissions(["users:read"])),
+):
+    """Every permission the platform defines, grouped for the role editor.
+
+    Served from app/core/permission_catalog.py so the Create Custom Role dialog
+    stops rendering a hardcoded frontend array. That array was missing five
+    permissions that are actually enforced — Control Center access could not be
+    granted to a custom role at all — while offering eight that gate nothing.
+    """
+    from app.core.permission_catalog import as_payload
+
+    return as_payload()

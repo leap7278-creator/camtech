@@ -1,0 +1,52 @@
+from pydantic import BaseModel
+from typing import Optional, List, Generic, TypeVar
+
+T = TypeVar("T")
+
+class PageMeta(BaseModel):
+    page: int = 1
+    limit: int = 50
+    total: int = 0
+    totalPages: int = 1
+
+class PaginatedResponse(BaseModel, Generic[T]):
+    items: List[T]
+    meta: PageMeta
+    total: Optional[int] = None
+
+class InventoryItemDto(BaseModel):
+    id: str
+    organizationId: str
+    locationId: str
+    locationName: str = "Central Store"
+    variantId: str
+    productVariantId: str
+    sku: str
+    productName: str
+    variantName: Optional[str] = None
+    stockOnHand: float
+    reservedQty: float = 0.0
+    availableQty: float
+    reorderPoint: Optional[float] = 0.0
+    isLowStock: bool = False
+    updatedAt: Optional[str] = None
+
+class AdjustInventoryInput(BaseModel):
+    productVariantId: str
+    locationId: str
+    type: str  # ADJUSTMENT_IN, ADJUSTMENT_OUT, DAMAGE, EXPIRED, COUNT
+    quantity: float
+    notes: Optional[str] = None
+
+class StockMovementDto(BaseModel):
+    id: str
+    organizationId: str
+    inventoryItemId: str
+    type: str
+    quantity: float
+    balanceAfter: float
+    referenceType: Optional[str] = None
+    referenceId: Optional[str] = None
+    notes: Optional[str] = None
+    userId: str
+    createdAt: Optional[str] = None

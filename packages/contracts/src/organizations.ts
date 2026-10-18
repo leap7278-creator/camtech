@@ -1,0 +1,126 @@
+import { z } from 'zod';
+
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
+export const BUSINESS_TYPES = [
+  'RETAIL',
+  'WHOLESALE',
+  'SUPERMARKET',
+  'CAFE',
+  'RESTAURANT',
+  'FUEL_STATION',
+  'PHARMACY',
+  'ELECTRONICS',
+  'FASHION',
+  'AUTOMOTIVE',
+  'WAREHOUSE',
+] as const;
+
+export type BusinessType = (typeof BUSINESS_TYPES)[number];
+
+// ---------------------------------------------------------------------------
+// Schemas
+// ---------------------------------------------------------------------------
+
+export const organizationSettingsSchema = z.object({
+  currency: z.string().trim().min(3).max(5).default('USD'),
+  timezone: z.string().trim().min(1).max(50).default('UTC'),
+  taxRatePct: z.number().min(0).max(100).default(10),
+  businessType: z.enum(BUSINESS_TYPES).default('RETAIL'),
+  enabledModules: z.array(z.string()).default([
+    'products',
+    'customers',
+    'sales',
+    'inventory',
+    'locations',
+  ]),
+  receiptHeader: z.string().trim().max(200).optional().nullable(),
+  receiptFooter: z.string().trim().max(200).optional().nullable(),
+});
+
+export type OrganizationSettingsDto = z.infer<typeof organizationSettingsSchema>;
+
+export const updateOrganizationSettingsSchema = organizationSettingsSchema.partial();
+export type UpdateOrganizationSettingsInput = z.infer<typeof updateOrganizationSettingsSchema>;
+
+// ---------------------------------------------------------------------------
+// DTOs
+// ---------------------------------------------------------------------------
+
+export interface OrganizationDto {
+  id: string;
+  name: string;
+  slug: string;
+  currency: string;
+  timezone: string;
+  taxRatePct: number;
+  businessType: BusinessType;
+  settings: OrganizationSettingsDto;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreateOrganizationInput {
+  name: string;
+  slug?: string;
+  currency?: string;
+  timezone?: string;
+  taxRatePct?: number;
+  businessType?: BusinessType;
+  ownerEmail?: string;
+  ownerName?: string;
+  ownerPassword?: string;
+}
+
+export interface BakongConfigDto {
+  accountId: string;
+  merchantName: string;
+  merchantCity?: string;
+  currency?: string;
+  enabled: boolean;
+  isConfigured: boolean;
+  accountName?: string | null;
+}
+
+export interface UpdateBakongConfigInput {
+  accountId: string;
+  merchantName?: string;
+  merchantCity?: string;
+  currency?: string;
+  enabled?: boolean;
+  token?: string;
+}
+
+export interface VerifyBakongAccountInput {
+  accountId: string;
+  token?: string;
+}
+
+export interface VerifyBakongAccountResultDto {
+  valid: boolean;
+  accountId: string;
+  accountName?: string | null;
+  currency?: string | null;
+  errorCode?: number | null;
+  message: string;
+}
+
+export interface OrganizationChannelsDto {
+  organizationId: string;
+  organizationName: string;
+  organizationSlug: string;
+  storefrontUrl: string;
+  telegramMiniAppUrl: string;
+  apiBaseUrl: string;
+  publicCatalogEndpoint: string;
+  checkoutEndpoint: string;
+  telegramBotAuthEndpoint: string;
+  paywayConfigured: boolean;
+  paywayMerchantId?: string | null;
+  bakongConfigured?: boolean;
+  bakongAccountId?: string | null;
+  bakongEnabled?: boolean;
+}
+

@@ -1,0 +1,1970 @@
+import type {
+  ApiResponse,
+  CreateProductInput,
+  UpdateProductInput,
+  CategoryDto,
+  CategoryTreeNodeDto,
+  CreateCategoryInput,
+  UpdateCategoryInput,
+  ReorderCategoriesInput,
+  CreateCustomerInput,
+  UpdateCustomerInput,
+  CreateSaleInput,
+  AdjustInventoryInput,
+  LoginResult,
+  PasskeyDto,
+  UserDetailDto,
+  CreateUserInput,
+  UpdateUserInput,
+  Paginated,
+  ProductDto,
+  CustomerDto,
+  SaleDto,
+  SaleSummaryDto,
+  InventoryItemDto,
+  StockMovementDto,
+  LocationDto,
+  LocationTreeNodeDto,
+  CreateLocationInput,
+  UpdateLocationInput,
+  OrganizationDto,
+  CreateOrganizationInput,
+  OrganizationChannelsDto,
+  UpdateOrganizationSettingsInput,
+  BakongConfigDto,
+  UpdateBakongConfigInput,
+  VerifyBakongAccountInput,
+  VerifyBakongAccountResultDto,
+  SupplierDto,
+  CreateSupplierInput,
+  UpdateSupplierInput,
+  PurchaseOrderDto,
+  PurchaseOrderSummaryDto,
+  CreatePurchaseOrderInput,
+  GoodsReceiptDto,
+  CreateGoodsReceiptInput,
+  PromotionDto,
+  CreatePromotionInput,
+  UpdatePromotionInput,
+  EvaluatePromotionInput,
+  PromotionEvaluationResultDto,
+  PriceListDto,
+  CreatePriceListInput,
+  UpdatePriceListInput,
+  PriceListItemDto,
+  SetPriceListItemInput,
+  ResolvePricesInput,
+  ResolvedPricesResultDto,
+  SyncBatchRequest,
+  SyncBatchResponseDto,
+  CreatePaymentIntentInput,
+  PaymentIntentDto,
+  PaymentVerificationDto,
+  PaymentWebhookPayload,
+  StockTransferDto,
+  CreateStockTransferInput,
+  UpdateStockTransferStatusInput,
+  ReceiveStockTransferInput,
+  WarehouseZoneDto,
+  WarehouseBinDto,
+  ProductBatchDto,
+  CreateWarehouseZoneInput,
+  CreateWarehouseBinInput,
+  CreateProductBatchInput,
+  PickingOrderDto,
+  FulfillPickingInput,
+  StockTransferStatus,
+  TaxRateDto,
+  CreateTaxRateInput,
+  UpdateTaxRateInput,
+  CalculateTaxesInput,
+  TaxCalculationResultDto,
+  LoyaltyProgramConfigDto,
+  LoyaltyTransactionDto,
+  StoreCreditTransactionDto,
+  CustomerLoyaltyProfileDto,
+  UpdateLoyaltyConfigInput,
+  AdjustLoyaltyPointsInput,
+  AdjustStoreCreditInput,
+  RedeemLoyaltyPointsInput,
+  StorageProviderDto,
+  StorageObjectDto,
+  StorageStatsDto,
+  StoragePolicyDto,
+  StoragePolicyCreateInput,
+  UploadIntentDto,
+  DocumentRecordDto,
+  CreateUploadIntentInput,
+  ConfirmUploadInput,
+  ListDocumentsQuery,
+  DocumentEntityType,
+  NotificationRecordDto,
+  NotificationConfigDto,
+  NotificationStatsDto,
+  SendNotificationInput,
+  UpdateNotificationConfigInput,
+  ListNotificationsQuery,
+  ExecutiveReportSummaryDto,
+  BusinessDashboardDto,
+  ReportDateRangeQuery,
+  ExportReportQuery,
+  AccountDto,
+  CreateAccountInput,
+  UpdateAccountInput,
+  JournalEntryDto,
+  CreateJournalEntryInput,
+  TrialBalanceDto,
+  IncomeStatementDto,
+  BalanceSheetDto,
+  FinanceSummaryDto,
+  FinancialStatementQuery,
+  JournalEntryStatus,
+  AccountType,
+  WorkflowInstanceDto,
+  SubmitApprovalInput,
+  ReviewWorkflowStepInput,
+  WorkflowStatus,
+  DepartmentDto,
+  CreateDepartmentInput,
+  EmployeeDto,
+  CreateEmployeeInput,
+  LeaveRequestDto,
+  CreateLeaveRequestInput,
+  PayrollRunDto,
+  CreatePayrollRunInput,
+  FixedAssetDto,
+  CreateFixedAssetInput,
+  DepreciationRecordDto,
+  ProjectDto,
+  CreateProjectInput,
+  ProjectTaskDto,
+  CreateProjectTaskInput,
+  TimesheetEntryDto,
+  LogTimesheetInput,
+  ServiceTicketDto,
+  CreateServiceTicketInput,
+  TicketCommentDto,
+  AddTicketCommentInput,
+  TicketStatus,
+  TicketPriority,
+  DeveloperAppDto,
+  CreateDeveloperAppInput,
+  ApiKeyDto,
+  CreateApiKeyInput,
+  CreateApiKeyResultDto,
+  WebhookSubscriptionDto,
+  CreateWebhookSubscriptionInput,
+  TelegramChatBindingDto,
+  BindTelegramChatInput,
+  UpdateTelegramBindingInput,
+  TelegramBotDto,
+  CreateTelegramBotInput,
+  UpdateTelegramBotInput,
+  TelegramBotTestResult,
+  AutomationFlowDto,
+  CreateFlowInput,
+  UpdateFlowInput,
+  FlowExecutionDto,
+  DeliveryOrderDto,
+  DeliveryDriverDto,
+  LiveTrackingSnapshotDto,
+  CreateDeliveryOrderInput,
+  CreateDriverInput,
+  CopilotChatResponse,
+  IndustryConfigDto,
+  TableDto,
+  KDSTicketDto,
+  BotWorkflowDto,
+  CreateBotWorkflowInput,
+  UpdateBotWorkflowInput,
+  BotWorkflowVersionDto,
+  PublishWorkflowInput,
+  BotCommandDto,
+  CreateBotCommandInput,
+  UpdateBotCommandInput,
+  BotExecutionDto,
+} from '@mystore/contracts';
+
+
+
+const resolveApiBaseUrl = (): string => {
+  if (typeof window !== 'undefined') {
+    const host = window.location.hostname;
+    if (host && host !== 'localhost' && host !== '127.0.0.1') {
+      return window.location.origin;
+    }
+  }
+  return (
+    (typeof import.meta !== 'undefined' && (import.meta as any).env?.VITE_API_URL) ||
+    (typeof process !== 'undefined' && (process as any).env?.NEXT_PUBLIC_API_URL) ||
+    'http://localhost:4000'
+  );
+};
+
+export const BASE_URL = resolveApiBaseUrl();
+export const API = `${BASE_URL}/api/v1`;
+
+/** Error carrying the backend's stable code + requestId (spec §14). */
+export class ApiClientError extends Error {
+  constructor(
+    public readonly code: string,
+    message: string,
+    public readonly requestId?: string,
+  ) {
+    super(message);
+    this.name = 'ApiClientError';
+  }
+}
+
+export function isJwtExpired(token: string): boolean {
+  try {
+    const parts = token.split('.');
+    if (parts.length !== 3) return false;
+    const jsonStr = atob(parts[1].replace(/-/g, '+').replace(/_/g, '/'));
+    const payload = JSON.parse(jsonStr);
+    if (typeof payload.exp !== 'number') return false;
+    return Date.now() >= payload.exp * 1000 - 5000;
+  } catch {
+    return false;
+  }
+}
+
+export function getStoredAuthToken(): string | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = localStorage.getItem('mystore-auth');
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed?.state?.token) {
+        const token = parsed.state.token;
+        if (isJwtExpired(token)) {
+          localStorage.removeItem('mystore-auth');
+          return null;
+        }
+        return token;
+      }
+    }
+  } catch {}
+  const rawToken = localStorage.getItem('token');
+  if (rawToken && isJwtExpired(rawToken)) {
+    localStorage.removeItem('token');
+    return null;
+  }
+  return rawToken || null;
+}
+
+async function request<T>(
+  path: string,
+  options: RequestInit & { token?: string } = {},
+): Promise<T> {
+  const { token, headers, ...rest } = options;
+  const authToken = token || getStoredAuthToken();
+  const res = await fetch(`${API}${path}`, {
+    ...rest,
+    headers: {
+      'Content-Type': 'application/json',
+      ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
+      ...headers,
+    },
+  });
+
+  let rawJson: any;
+  try {
+    rawJson = await res.json();
+  } catch {
+    if (res.status === 401) {
+      if (typeof window !== 'undefined') {
+        try {
+          localStorage.removeItem('mystore-auth');
+          localStorage.removeItem('token');
+        } catch {}
+        const p = window.location.pathname;
+        if (!p.startsWith('/login') && !p.startsWith('/shop') && !p.startsWith('/customer')) {
+          window.location.href = '/login?expired=true';
+        }
+      }
+      throw new ApiClientError('UNAUTHORIZED', 'Session expired. Please sign in again.');
+    }
+    throw new ApiClientError('NETWORK', `Unexpected response (HTTP ${res.status})`);
+  }
+
+  // Handle standard { success: true, data: ... } envelope
+  const isSuccess = rawJson && typeof rawJson === 'object' && rawJson.success === true;
+  if (isSuccess) {
+    return rawJson.data as T;
+  }
+
+  // Handle direct unwrapped 2xx response (e.g. { accessToken: ... } or direct DTOs)
+  const isExplicitFailure = rawJson && typeof rawJson === 'object' && rawJson.success === false;
+  if (res.status >= 200 && res.status < 300 && !isExplicitFailure) {
+    return (rawJson?.data !== undefined ? rawJson.data : rawJson) as T;
+  }
+
+  // Error case (either { success: false, code, message } or HTTP error)
+  if (res.status === 401 || rawJson?.code === 'UNAUTHORIZED') {
+    if (typeof window !== 'undefined') {
+      try {
+        localStorage.removeItem('mystore-auth');
+        localStorage.removeItem('token');
+      } catch {}
+      const p = window.location.pathname;
+      if (!p.startsWith('/login') && !p.startsWith('/shop') && !p.startsWith('/customer')) {
+        window.location.href = '/login?expired=true';
+      }
+    }
+  }
+  throw new ApiClientError(rawJson?.code, rawJson?.message, rawJson?.requestId);
+}
+
+export const apiClient = {
+  get: <T>(url: string, options?: RequestInit & { token?: string }) =>
+    request<T>(url.replace(/^\/api\/v1/, ''), { method: 'GET', ...options }),
+  post: <T>(url: string, body?: any, options?: RequestInit & { token?: string }) =>
+    request<T>(url.replace(/^\/api\/v1/, ''), {
+      method: 'POST',
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+      ...options,
+    }),
+  put: <T>(url: string, body?: any, options?: RequestInit & { token?: string }) =>
+    request<T>(url.replace(/^\/api\/v1/, ''), {
+      method: 'PUT',
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+      ...options,
+    }),
+  delete: <T>(url: string, options?: RequestInit & { token?: string }) =>
+    request<T>(url.replace(/^\/api\/v1/, ''), { method: 'DELETE', ...options }),
+  /** Upload raw binary (file) via PUT with JWT auth — returns raw Response (not enveloped) */
+  putRaw: (url: string, body: BodyInit, options: { token?: string; contentType?: string }) => {
+    const { token, contentType } = options;
+    const authToken = token || getStoredAuthToken();
+    const path = url.replace(/^\/api\/v1/, '');
+    return fetch(`${API}${path}`, {
+      method: 'PUT',
+      body,
+      headers: {
+        'Content-Type': contentType || 'application/octet-stream',
+        ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
+      },
+    });
+  },
+  baseUrl: BASE_URL,
+};
+
+
+export const api = {
+  // ─── Delivery Auth ─────────────────────────────────────────────
+  deliveryAuthInit: (phone_number: string, telegram_init_data: string) =>
+    request<{ success: boolean; message: string }>('/delivery/auth/register/init', {
+      method: 'POST',
+      body: JSON.stringify({ phone_number, telegram_init_data }),
+    }),
+
+  deliveryAuthVerify: (phone_number: string, otp_code: string, telegram_init_data: string) =>
+    request<{ success: boolean; status: string }>('/delivery/auth/register/verify', {
+      method: 'POST',
+      body: JSON.stringify({ phone_number, otp_code, telegram_init_data }),
+    }),
+
+  deliveryAuthAutoLogin: (telegram_init_data: string) =>
+    request<{ success: boolean; auth_status: string; access_token?: string; user?: any }>('/delivery/auth/login/auto', {
+      method: 'POST',
+      body: JSON.stringify({ telegram_init_data }),
+    }),
+
+  deliveryAuthApprove: (token: string, driverId: string) =>
+    request<{ success: boolean; message: string }>(`/delivery/auth/approve/${driverId}`, {
+      method: 'PATCH',
+      token,
+    }),
+
+  // ─── Auth ──────────────────────────────────────────────────────
+  login: (email: string, password: string) =>
+    request<LoginResult>('/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ email, password }),
+    }),
+
+  oauthSync: (data: { email: string; name?: string; provider?: string; providerId?: string; avatarUrl?: string }) =>
+    request<LoginResult>('/auth/oauth-sync', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+
+  // ─── Passkeys (WebAuthn) ─────────────────────────────────────────────────
+  // Each ceremony is two calls: the server issues options plus an opaque
+  // `handle`, and the handle must be echoed back so it can match the assertion
+  // to the single-use challenge it stored.
+
+  passkeyRegisterOptions: (token: string, name?: string) =>
+    request<{ handle: string; options: any }>('/auth/passkeys/register/options', {
+      method: 'POST',
+      token,
+      body: JSON.stringify({ name }),
+    }),
+
+  passkeyRegisterVerify: (token: string, input: { handle: string; credential: unknown; name?: string }) =>
+    request<PasskeyDto>('/auth/passkeys/register/verify', {
+      method: 'POST',
+      token,
+      body: JSON.stringify(input),
+    }),
+
+  passkeyLoginOptions: (email?: string) =>
+    request<{ handle: string; options: any }>('/auth/passkeys/login/options', {
+      method: 'POST',
+      body: JSON.stringify({ email }),
+    }),
+
+  passkeyLoginVerify: (input: { handle: string; credential: unknown }) =>
+    request<LoginResult>('/auth/passkeys/login/verify', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }),
+
+  listPasskeys: (token: string) => request<PasskeyDto[]>('/auth/passkeys', { token }),
+
+  /** Authoritative permission catalogue for the role editor. Served by the
+   *  backend so the editor cannot drift as guarded endpoints are added. */
+  listPermissionCatalog: (token: string) =>
+    request<{
+      wildcard: string;
+      categories: Array<{
+        name: string;
+        permissions: Array<{
+          key: string;
+          label: string;
+          description: string;
+          enforced: boolean;
+          platformScope: boolean;
+        }>;
+      }>;
+    }>('/auth/permissions', { token }),
+
+  renamePasskey: (token: string, id: string, name: string) =>
+    request<PasskeyDto>(`/auth/passkeys/${id}`, {
+      method: 'PATCH',
+      token,
+      body: JSON.stringify({ name }),
+    }),
+
+  deletePasskey: (token: string, id: string) =>
+    request<{ deleted: boolean; id: string }>(`/auth/passkeys/${id}`, {
+      method: 'DELETE',
+      token,
+    }),
+
+  // ─── Users & Access Control ──────────────────────────────────
+  listUsers: (token: string) =>
+    request<UserDetailDto[]>('/auth/users', { token }),
+
+  createUser: (token: string, input: CreateUserInput) =>
+    request<UserDetailDto>('/auth/users', {
+      method: 'POST',
+      token,
+      body: JSON.stringify(input),
+    }),
+
+  updateUser: (token: string, userId: string, input: UpdateUserInput) =>
+    request<UserDetailDto>(`/auth/users/${userId}`, {
+      method: 'PATCH',
+      token,
+      body: JSON.stringify(input),
+    }),
+
+  deactivateUser: (token: string, userId: string) =>
+    request<{ success: boolean; message: string }>(`/auth/users/${userId}`, {
+      method: 'DELETE',
+      token,
+    }),
+
+  listRoles: (token: string) =>
+    request<any[]>('/auth/roles', { token }),
+
+  createRole: (token: string, input: any) =>
+    request<any>('/auth/roles', {
+      method: 'POST',
+      token,
+      body: JSON.stringify(input),
+    }),
+
+  updateRole: (token: string, roleId: string, input: any) =>
+    request<any>(`/auth/roles/${roleId}`, {
+      method: 'PATCH',
+      token,
+      body: JSON.stringify(input),
+    }),
+
+  deleteRole: (token: string, roleId: string) =>
+    request<{ success: boolean }>(`/auth/roles/${roleId}`, {
+      method: 'DELETE',
+      token,
+    }),
+
+  // ─── Products ──────────────────────────────────────────────────
+  listProducts: (token: string, params: { page?: number; limit?: number; search?: string } = {}) => {
+    const qs = new URLSearchParams();
+    if (params.page) qs.set('page', String(params.page));
+    if (params.limit) qs.set('limit', String(params.limit));
+    if (params.search) qs.set('search', params.search);
+    const q = qs.toString();
+    return request<Paginated<ProductDto>>(`/products${q ? `?${q}` : ''}`, { token });
+  },
+
+  createProduct: (token: string, input: CreateProductInput) =>
+    request<ProductDto>('/products', {
+      method: 'POST',
+      token,
+      body: JSON.stringify(input),
+    }),
+
+  updateProduct: (token: string, productId: string, input: UpdateProductInput) =>
+    request<ProductDto>(`/products/${productId}`, {
+      method: 'PATCH',
+      token,
+      body: JSON.stringify(input),
+    }),
+
+  deleteProduct: (token: string, productId: string) =>
+    request<{ deleted: boolean; archived: boolean; id: string; message: string }>(`/products/${productId}`, {
+      method: 'DELETE',
+      token,
+    }),
+
+  addProductImage: (token: string, productId: string, data: { storageObjectId: string; isPrimary?: boolean; altText?: string | null }) =>
+    request<any>(`/products/${productId}/images`, {
+      method: 'POST',
+      token,
+      body: JSON.stringify(data),
+    }),
+
+  deleteProductImage: (token: string, productId: string, imageId: string) =>
+    request<{ success: boolean }>(`/products/${productId}/images/${imageId}`, {
+      method: 'DELETE',
+      token,
+    }),
+
+  setPrimaryProductImage: (token: string, productId: string, imageId: string) =>
+    request<{ success: boolean }>(`/products/${productId}/images/${imageId}/primary`, {
+      method: 'PATCH',
+      token,
+    }),
+
+  reorderProductImages: (token: string, productId: string, imageIds: string[]) =>
+    request<{ success: boolean }>(`/products/${productId}/images/reorder`, {
+      method: 'PATCH',
+      token,
+      body: JSON.stringify({ imageIds }),
+    }),
+
+  // ─── Categories ────────────────────────────────────────────────
+  listCategories: (token: string) =>
+    request<CategoryDto[]>('/categories', { token }),
+
+  getCategoryTree: (token: string) =>
+    request<CategoryTreeNodeDto[]>('/categories/tree', { token }),
+
+  createCategory: (token: string, input: CreateCategoryInput) =>
+    request<CategoryDto>('/categories', {
+      method: 'POST',
+      token,
+      body: JSON.stringify(input),
+    }),
+
+  updateCategory: (token: string, categoryId: string, input: UpdateCategoryInput) =>
+    request<CategoryDto>(`/categories/${categoryId}`, {
+      method: 'PATCH',
+      token,
+      body: JSON.stringify(input),
+    }),
+
+  deleteCategory: (token: string, categoryId: string) =>
+    request<{ deleted: boolean; id: string }>(`/categories/${categoryId}`, {
+      method: 'DELETE',
+      token,
+    }),
+
+  reorderCategories: (token: string, items: ReorderCategoriesInput['items']) =>
+    request<{ updated: number }>('/categories/reorder', {
+      method: 'PATCH',
+      token,
+      body: JSON.stringify({ items }),
+    }),
+
+  getPublicCategoriesTree: (params: { organizationId?: string; slug?: string } = {}) => {
+    const qs = new URLSearchParams();
+    if (params.organizationId) qs.set('organizationId', params.organizationId);
+    if (params.slug) qs.set('slug', params.slug);
+    const q = qs.toString();
+    return request<CategoryTreeNodeDto[]>(`/public/categories/tree${q ? `?${q}` : ''}`, {});
+  },
+
+  getPublicProducts: (params: { page?: number; limit?: number; search?: string; organizationId?: string; slug?: string } = {}) => {
+    const qs = new URLSearchParams();
+    if (params.page) qs.set('page', String(params.page));
+    if (params.limit) qs.set('limit', String(params.limit));
+    if (params.search) qs.set('search', params.search);
+    if (params.organizationId) qs.set('organizationId', params.organizationId);
+    if (params.slug) qs.set('slug', params.slug);
+    const q = qs.toString();
+    return request<Paginated<ProductDto>>(`/public/products${q ? `?${q}` : ''}`, {});
+  },
+
+  // ─── Customers ─────────────────────────────────────────────────
+  listCustomers: (token: string, params: { page?: number; limit?: number; search?: string; type?: string } = {}) => {
+    const qs = new URLSearchParams();
+    if (params.page) qs.set('page', String(params.page));
+    if (params.limit) qs.set('limit', String(params.limit));
+    if (params.search) qs.set('search', params.search);
+    if (params.type) qs.set('type', params.type);
+    const q = qs.toString();
+    return request<Paginated<CustomerDto>>(`/customers${q ? `?${q}` : ''}`, { token });
+  },
+
+  createCustomer: (token: string, input: CreateCustomerInput) =>
+    request<CustomerDto>('/customers', {
+      method: 'POST',
+      token,
+      body: JSON.stringify(input),
+    }),
+
+  updateCustomer: (token: string, id: string, input: UpdateCustomerInput) =>
+    request<CustomerDto>(`/customers/${id}`, {
+      method: 'PATCH',
+      token,
+      body: JSON.stringify(input),
+    }),
+
+  // ─── Sales ─────────────────────────────────────────────────────
+  listSales: (
+    token: string,
+    params: {
+      page?: number;
+      limit?: number;
+      status?: string;
+      channel?: string;
+      search?: string;
+      from?: string;
+      to?: string;
+    } = {},
+  ) => {
+    const qs = new URLSearchParams();
+    if (params.page) qs.set('page', String(params.page));
+    if (params.limit) qs.set('limit', String(params.limit));
+    if (params.status) qs.set('status', params.status);
+    if (params.channel) qs.set('channel', params.channel);
+    if (params.search) qs.set('search', params.search);
+    if (params.from) qs.set('from', params.from);
+    if (params.to) qs.set('to', params.to);
+    const q = qs.toString();
+    return request<Paginated<SaleSummaryDto>>(`/sales${q ? `?${q}` : ''}`, { token });
+  },
+
+  getSale: (token: string, id: string) =>
+    request<SaleDto>(`/sales/${id}`, { token }),
+
+  createSale: (token: string, input: CreateSaleInput) => {
+    // The canonical Python backend expects `items: [{ variantId, quantity }]`,
+    // while the shared contract still uses `lineItems: [{ productVariantId }]`.
+    // Adapt at the boundary so POS checkout works until the contract is
+    // reconciled with the backend. Price/tax are resolved server-side.
+    const body = {
+      ...input,
+      items: (input.lineItems ?? []).map((li) => ({
+        variantId: li.productVariantId,
+        quantity: li.quantity,
+      })),
+    };
+    return request<SaleDto>('/sales', {
+      method: 'POST',
+      token,
+      body: JSON.stringify(body),
+    });
+  },
+
+  storeCheckout: (token: string | null, input: any) =>
+    request<SaleDto>('/sales/store-checkout', {
+      method: 'POST',
+      token: token || undefined,
+      body: JSON.stringify(input),
+    }),
+
+  getCustomerOrders: (params: { phone?: string; email?: string; organizationId?: string } = {}) => {
+    const q = new URLSearchParams();
+    if (params.phone) q.set('phone', params.phone);
+    if (params.email) q.set('email', params.email);
+    if (params.organizationId) q.set('organization_id', params.organizationId);
+    return request<Paginated<SaleDto>>(`/sales/customer-orders${q.toString() ? `?${q.toString()}` : ''}`);
+  },
+
+  getOrderPaymentStatus: (saleId: string) =>
+    request<{ paid: boolean; status: string; saleId: string; saleNumber: string; amount: number }>(
+      `/sales/orders/${saleId}/payment-status`
+    ),
+
+  syncSalesBatch: (token: string, input: SyncBatchRequest) =>
+    request<SyncBatchResponseDto>('/sales/sync-batch', {
+      method: 'POST',
+      token,
+      body: JSON.stringify(input),
+    }),
+
+  voidSale: (token: string, id: string) =>
+    request<SaleDto>(`/sales/${id}/void`, { method: 'POST', token }),
+
+  completeSale: (token: string, id: string) =>
+    request<SaleDto>(`/sales/${id}/complete`, { method: 'PATCH', token }),
+
+  // ─── Inventory ─────────────────────────────────────────────────
+  listInventory: (
+    token: string,
+    params: {
+      page?: number;
+      limit?: number;
+      locationId?: string;
+      lowStockOnly?: boolean;
+      search?: string;
+    } = {},
+  ) => {
+    const qs = new URLSearchParams();
+    if (params.page) qs.set('page', String(params.page));
+    if (params.limit) qs.set('limit', String(params.limit));
+    if (params.locationId) qs.set('locationId', params.locationId);
+    if (params.lowStockOnly) qs.set('lowStockOnly', 'true');
+    if (params.search) qs.set('search', params.search);
+    const q = qs.toString();
+    return request<Paginated<InventoryItemDto>>(`/inventory${q ? `?${q}` : ''}`, { token });
+  },
+
+  adjustInventory: (token: string, input: AdjustInventoryInput) =>
+    request<InventoryItemDto>('/inventory/adjust', {
+      method: 'POST',
+      token,
+      body: JSON.stringify(input),
+    }),
+
+  getMovements: (token: string, variantId: string) =>
+    request<{ items: StockMovementDto[]; total: number }>(`/inventory/${variantId}/movements`, {
+      token,
+    }),
+
+  // ─── Locations ─────────────────────────────────────────────────
+  listLocations: (
+    token: string,
+    params: { page?: number; limit?: number; search?: string; type?: string; parentId?: string | null } = {},
+  ) => {
+    const qs = new URLSearchParams();
+    if (params.page) qs.set('page', String(params.page));
+    if (params.limit) qs.set('limit', String(params.limit));
+    if (params.search) qs.set('search', params.search);
+    if (params.type) qs.set('type', params.type);
+    if (params.parentId !== undefined) qs.set('parentId', params.parentId ?? '');
+    const q = qs.toString();
+    return request<Paginated<LocationDto>>(`/locations${q ? `?${q}` : ''}`, { token });
+  },
+
+  getLocationTree: (token: string) =>
+    request<LocationTreeNodeDto[]>('/locations/tree', { token }),
+
+  createLocation: (token: string, input: CreateLocationInput) =>
+    request<LocationDto>('/locations', {
+      method: 'POST',
+      token,
+      body: JSON.stringify(input),
+    }),
+
+  updateLocation: (token: string, id: string, input: UpdateLocationInput) =>
+    request<LocationDto>(`/locations/${id}`, {
+      method: 'PATCH',
+      token,
+      body: JSON.stringify(input),
+    }),
+
+  deleteLocation: (token: string, id: string) =>
+    request<{ success: boolean }>(`/locations/${id}`, {
+      method: 'DELETE',
+      token,
+    }),
+
+  // ─── Organizations ─────────────────────────────────────────────
+  getCurrentOrg: (token: string) =>
+    request<OrganizationDto>('/organizations/current', { token }),
+
+  listOrganizations: (token: string) =>
+    request<OrganizationDto[]>('/organizations', { token }),
+
+  createOrganization: (token: string, input: CreateOrganizationInput) =>
+    request<OrganizationDto>('/organizations', {
+      method: 'POST',
+      token,
+      body: JSON.stringify(input),
+    }),
+
+  getOrgChannels: (token: string, orgId?: string) =>
+    request<OrganizationChannelsDto>(`/organizations/${orgId || 'current'}/channels`, { token }),
+
+  updateOrgSettings: (token: string, input: UpdateOrganizationSettingsInput) =>
+    request<OrganizationDto>('/organizations/current/settings', {
+      method: 'PATCH',
+      token,
+      body: JSON.stringify(input),
+    }),
+
+  getCurrentOrgPayway: (token: string) =>
+    request<any>('/organizations/current/payway', { token }),
+
+  updateOrgPayway: (token: string, input: any) =>
+    request<any>('/organizations/current/payway', {
+      method: 'PUT',
+      token,
+      body: JSON.stringify(input),
+    }),
+
+  getCurrentOrgBakong: (token: string) =>
+    request<BakongConfigDto>('/organizations/current/bakong', { token }),
+
+  updateOrgBakong: (token: string, input: UpdateBakongConfigInput) =>
+    request<BakongConfigDto>('/organizations/current/bakong', {
+      method: 'PUT',
+      token,
+      body: JSON.stringify(input),
+    }),
+
+  verifyOrgBakongAccount: (token: string, input: VerifyBakongAccountInput) =>
+    request<VerifyBakongAccountResultDto>('/organizations/current/bakong/verify', {
+      method: 'POST',
+      token,
+      body: JSON.stringify(input),
+    }),
+
+  // ─── Procurement & Suppliers ───────────────────────────────────
+  listSuppliers: (token: string, params: { page?: number; limit?: number; search?: string } = {}) => {
+    const qs = new URLSearchParams();
+    if (params.page) qs.set('page', String(params.page));
+    if (params.limit) qs.set('limit', String(params.limit));
+    if (params.search) qs.set('search', params.search);
+    const q = qs.toString();
+    return request<Paginated<SupplierDto>>(`/procurement/suppliers${q ? `?${q}` : ''}`, { token });
+  },
+
+  createSupplier: (token: string, input: CreateSupplierInput) =>
+    request<SupplierDto>('/procurement/suppliers', {
+      method: 'POST',
+      token,
+      body: JSON.stringify(input),
+    }),
+
+  updateSupplier: (token: string, id: string, input: UpdateSupplierInput) =>
+    request<SupplierDto>(`/procurement/suppliers/${id}`, {
+      method: 'PATCH',
+      token,
+      body: JSON.stringify(input),
+    }),
+
+  // ─── Purchase Orders ───────────────────────────────────────────
+  listPurchaseOrders: (
+    token: string,
+    params: { page?: number; limit?: number; status?: string; supplierId?: string; locationId?: string; search?: string } = {},
+  ) => {
+    const qs = new URLSearchParams();
+    if (params.page) qs.set('page', String(params.page));
+    if (params.limit) qs.set('limit', String(params.limit));
+    if (params.status) qs.set('status', params.status);
+    if (params.supplierId) qs.set('supplierId', params.supplierId);
+    if (params.locationId) qs.set('locationId', params.locationId);
+    if (params.search) qs.set('search', params.search);
+    const q = qs.toString();
+    return request<Paginated<PurchaseOrderSummaryDto>>(`/procurement/orders${q ? `?${q}` : ''}`, { token });
+  },
+
+  getPurchaseOrder: (token: string, id: string) =>
+    request<PurchaseOrderDto>(`/procurement/orders/${id}`, { token }),
+
+  createPurchaseOrder: (token: string, input: CreatePurchaseOrderInput) =>
+    request<PurchaseOrderDto>('/procurement/orders', {
+      method: 'POST',
+      token,
+      body: JSON.stringify(input),
+    }),
+
+  approvePurchaseOrder: (token: string, id: string) =>
+    request<PurchaseOrderDto>(`/procurement/orders/${id}/approve`, {
+      method: 'POST',
+      token,
+    }),
+
+  cancelPurchaseOrder: (token: string, id: string) =>
+    request<PurchaseOrderDto>(`/procurement/orders/${id}/cancel`, {
+      method: 'POST',
+      token,
+    }),
+
+  // ─── Goods Receipt Notes (GRN) ─────────────────────────────────
+  receiveGoods: (token: string, poId: string, input: CreateGoodsReceiptInput) =>
+    request<GoodsReceiptDto>(`/procurement/orders/${poId}/receive`, {
+      method: 'POST',
+      token,
+      body: JSON.stringify(input),
+    }),
+
+  listGoodsReceipts: (token: string, params: { page?: number; limit?: number; poId?: string } = {}) => {
+    const qs = new URLSearchParams();
+    if (params.page) qs.set('page', String(params.page));
+    if (params.limit) qs.set('limit', String(params.limit));
+    if (params.poId) qs.set('poId', params.poId);
+    const q = qs.toString();
+    return request<Paginated<GoodsReceiptDto>>(`/procurement/receipts${q ? `?${q}` : ''}`, { token });
+  },
+
+  // ─── Promotions & Discounts ────────────────────────────────────
+  listPromotions: (
+    token: string,
+    params: { page?: number; limit?: number; type?: string; scope?: string; isActive?: boolean; search?: string } = {},
+  ) => {
+    const qs = new URLSearchParams();
+    if (params.page) qs.set('page', String(params.page));
+    if (params.limit) qs.set('limit', String(params.limit));
+    if (params.type) qs.set('type', params.type);
+    if (params.scope) qs.set('scope', params.scope);
+    if (params.isActive !== undefined) qs.set('isActive', String(params.isActive));
+    if (params.search) qs.set('search', params.search);
+    const q = qs.toString();
+    return request<PromotionDto[]>(`/promotions${q ? `?${q}` : ''}`, { token });
+  },
+
+  createPromotion: (token: string, input: CreatePromotionInput) =>
+    request<PromotionDto>('/promotions', {
+      method: 'POST',
+      token,
+      body: JSON.stringify(input),
+    }),
+
+  updatePromotion: (token: string, id: string, input: UpdatePromotionInput) =>
+    request<PromotionDto>(`/promotions/${id}`, {
+      method: 'PATCH',
+      token,
+      body: JSON.stringify(input),
+    }),
+
+  evaluatePromotion: (token: string, input: EvaluatePromotionInput) =>
+    request<PromotionEvaluationResultDto>('/promotions/evaluate', {
+      method: 'POST',
+      token,
+      body: JSON.stringify(input),
+    }),
+
+  // ─── Pricing & Price Lists ─────────────────────────────────────
+  listPriceLists: (
+    token: string,
+    params: { page?: number; limit?: number; customerType?: string; isActive?: boolean; search?: string } = {},
+  ) => {
+    const qs = new URLSearchParams();
+    if (params.page) qs.set('page', String(params.page));
+    if (params.limit) qs.set('limit', String(params.limit));
+    if (params.customerType) qs.set('customerType', params.customerType);
+    if (params.isActive !== undefined) qs.set('isActive', String(params.isActive));
+    if (params.search) qs.set('search', params.search);
+    const q = qs.toString();
+    return request<Paginated<PriceListDto>>(`/pricing${q ? `?${q}` : ''}`, { token });
+  },
+
+  getPriceList: (token: string, id: string) =>
+    request<PriceListDto>(`/pricing/${id}`, { token }),
+
+  createPriceList: (token: string, input: CreatePriceListInput) =>
+    request<PriceListDto>('/pricing', {
+      method: 'POST',
+      token,
+      body: JSON.stringify(input),
+    }),
+
+  updatePriceList: (token: string, id: string, input: UpdatePriceListInput) =>
+    request<PriceListDto>(`/pricing/${id}`, {
+      method: 'PATCH',
+      token,
+      body: JSON.stringify(input),
+    }),
+
+  setPriceListItem: (token: string, priceListId: string, input: SetPriceListItemInput) =>
+    request<PriceListItemDto>(`/pricing/${priceListId}/items`, {
+      method: 'POST',
+      token,
+      body: JSON.stringify(input),
+    }),
+
+  deletePriceListItem: (token: string, priceListId: string, itemId: string) =>
+    request<{ success: boolean }>(`/pricing/${priceListId}/items/${itemId}`, {
+      method: 'DELETE',
+      token,
+    }),
+
+  resolvePrices: (token: string, input: ResolvePricesInput) =>
+    request<ResolvedPricesResultDto>('/pricing/resolve', {
+      method: 'POST',
+      token,
+      body: JSON.stringify(input),
+    }),
+
+  // ─── Payments & KHQR ───────────────────────────────────────────
+  createPaymentIntent: (token: string, input: CreatePaymentIntentInput) =>
+    request<PaymentIntentDto>('/payments/intent', {
+      method: 'POST',
+      token,
+      body: JSON.stringify(input),
+    }),
+
+  verifyPayment: (token: string, id: string) =>
+    request<PaymentVerificationDto>(`/payments/${id}/verify`, { token }),
+
+  simulatePaymentWebhook: (provider: string, payload: PaymentWebhookPayload) =>
+    request<{ success: boolean; paymentId: string; status: string }>(`/payments/webhook/${provider}`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+
+  // ─── WMS & Stock Transfers ─────────────────────────────────────
+  listTransfers: (
+    token: string,
+    query?: { status?: StockTransferStatus; sourceLocationId?: string; destLocationId?: string },
+  ) => {
+    const params = new URLSearchParams();
+    if (query?.status) params.set('status', query.status);
+    if (query?.sourceLocationId) params.set('sourceLocationId', query.sourceLocationId);
+    if (query?.destLocationId) params.set('destLocationId', query.destLocationId);
+    const qs = params.toString();
+    return request<StockTransferDto[]>(`/wms/transfers${qs ? `?${qs}` : ''}`, { token });
+  },
+
+  getTransfer: (token: string, id: string) =>
+    request<StockTransferDto>(`/wms/transfers/${id}`, { token }),
+
+  createTransfer: (token: string, input: CreateStockTransferInput) =>
+    request<StockTransferDto>('/wms/transfers', {
+      method: 'POST',
+      token,
+      body: JSON.stringify(input),
+    }),
+
+  updateTransferStatus: (token: string, id: string, input: UpdateStockTransferStatusInput) =>
+    request<StockTransferDto>(`/wms/transfers/${id}/status`, {
+      method: 'PATCH',
+      token,
+      body: JSON.stringify(input),
+    }),
+
+  shipTransfer: (token: string, id: string) =>
+    request<StockTransferDto>(`/wms/transfers/${id}/ship`, {
+      method: 'POST',
+      token,
+    }),
+
+  receiveTransfer: (token: string, id: string, input: ReceiveStockTransferInput) =>
+    request<StockTransferDto>(`/wms/transfers/${id}/receive`, {
+      method: 'POST',
+      token,
+      body: JSON.stringify(input),
+    }),
+
+  listPickingOrders: (token: string) =>
+    request<PickingOrderDto[]>('/wms/picking-orders', { token }),
+
+  fulfillPickingOrder: (token: string, saleId: string, input: FulfillPickingInput = {}) =>
+    request<PickingOrderDto>(`/wms/picking-orders/${saleId}/fulfill`, {
+      method: 'POST',
+      token,
+      body: JSON.stringify(input),
+    }),
+
+  listZones: (token: string, locationId?: string) => {
+    const qs = locationId ? `?locationId=${locationId}` : '';
+    return request<WarehouseZoneDto[]>(`/wms/zones${qs}`, { token });
+  },
+
+  createZone: (token: string, input: CreateWarehouseZoneInput) =>
+    request<WarehouseZoneDto>('/wms/zones', {
+      method: 'POST',
+      token,
+      body: JSON.stringify(input),
+    }),
+
+  createBin: (token: string, input: CreateWarehouseBinInput) =>
+    request<WarehouseBinDto>('/wms/bins', {
+      method: 'POST',
+      token,
+      body: JSON.stringify(input),
+    }),
+
+  listBatches: (token: string, variantId?: string) => {
+    const qs = variantId ? `?productVariantId=${variantId}` : '';
+    return request<ProductBatchDto[]>(`/wms/batches${qs}`, { token });
+  },
+
+  createBatch: (token: string, input: CreateProductBatchInput) =>
+    request<ProductBatchDto>('/wms/batches', {
+      method: 'POST',
+      token,
+      body: JSON.stringify(input),
+    }),
+
+  // ─── Taxes & Fiscal Rules ──────────────────────────────────────
+  listTaxRates: (token: string) =>
+    request<TaxRateDto[]>('/taxes', { token }),
+
+  createTaxRate: (token: string, input: CreateTaxRateInput) =>
+    request<TaxRateDto>('/taxes', {
+      method: 'POST',
+      token,
+      body: JSON.stringify(input),
+    }),
+
+  updateTaxRate: (token: string, id: string, input: UpdateTaxRateInput) =>
+    request<TaxRateDto>(`/taxes/${id}`, {
+      method: 'PATCH',
+      token,
+      body: JSON.stringify(input),
+    }),
+
+  deleteTaxRate: (token: string, id: string) =>
+    request<{ success: boolean }>(`/taxes/${id}`, {
+      method: 'DELETE',
+      token,
+    }),
+
+  calculateTaxes: (token: string, input: CalculateTaxesInput) =>
+    request<TaxCalculationResultDto>('/taxes/calculate', {
+      method: 'POST',
+      token,
+      body: JSON.stringify(input),
+    }),
+
+  // ─── Loyalty & Store Credit ───────────────────────────────────
+  getLoyaltyConfig: (token: string) =>
+    request<LoyaltyProgramConfigDto>('/loyalty/config', { token }),
+
+  updateLoyaltyConfig: (token: string, input: UpdateLoyaltyConfigInput) =>
+    request<LoyaltyProgramConfigDto>('/loyalty/config', {
+      method: 'PATCH',
+      token,
+      body: JSON.stringify(input),
+    }),
+
+  getCustomerLoyaltyProfile: (token: string, customerId: string) =>
+    request<CustomerLoyaltyProfileDto>(`/loyalty/customer/${customerId}`, { token }),
+
+  adjustLoyaltyPoints: (token: string, input: AdjustLoyaltyPointsInput) =>
+    request<LoyaltyTransactionDto>('/loyalty/points/adjust', {
+      method: 'POST',
+      token,
+      body: JSON.stringify(input),
+    }),
+
+  redeemLoyaltyPoints: (token: string, input: RedeemLoyaltyPointsInput) =>
+    request<{ transaction: LoyaltyTransactionDto; discountAmount: number }>('/loyalty/points/redeem', {
+      method: 'POST',
+      token,
+      body: JSON.stringify(input),
+    }),
+
+  adjustStoreCredit: (token: string, input: AdjustStoreCreditInput) =>
+    request<StoreCreditTransactionDto>('/loyalty/credit/adjust', {
+      method: 'POST',
+      token,
+      body: JSON.stringify(input),
+    }),
+
+  listLoyaltyTransactions: (token: string, customerId?: string) => {
+    const qs = customerId ? `?customerId=${customerId}` : '';
+    return request<LoyaltyTransactionDto[]>(`/loyalty/transactions/points${qs}`, { token });
+  },
+
+  listStoreCreditTransactions: (token: string, customerId?: string) => {
+    const qs = customerId ? `?customerId=${customerId}` : '';
+    return request<StoreCreditTransactionDto[]>(`/loyalty/transactions/credit${qs}`, { token });
+  },
+
+  // ─── Storage & Documents Platform ─────────────────────────────
+  createUploadIntent: (token: string, input: CreateUploadIntentInput) =>
+    request<UploadIntentDto>('/storage/upload-intent', {
+      method: 'POST',
+      token,
+      body: JSON.stringify(input),
+    }),
+
+  confirmUpload: (token: string, input: ConfirmUploadInput) =>
+    request<{ success: boolean; objectId: string }>('/storage/confirm-upload', {
+      method: 'POST',
+      token,
+      body: JSON.stringify(input),
+    }),
+
+  listDocuments: (token: string, query?: ListDocumentsQuery) => {
+    const params = new URLSearchParams();
+    if (query?.entityType) params.append('entityType', query.entityType);
+    if (query?.entityId) params.append('entityId', query.entityId);
+    const qs = params.toString() ? `?${params.toString()}` : '';
+    return request<DocumentRecordDto[]>(`/storage${qs}`, { token });
+  },
+
+  deleteDocument: (token: string, id: string) =>
+    request<{ success: boolean }>(`/storage/${id}`, {
+      method: 'DELETE',
+      token,
+    }),
+
+  getStorageStats: (token: string) =>
+    request<StorageStatsDto>('/storage/stats', { token }),
+
+  uploadFile: async (
+    token: string,
+    file: File,
+    entityType?: DocumentEntityType,
+    entityId?: string,
+    providerId?: string,
+  ): Promise<{ success: boolean; objectId: string }> => {
+    // 1. Get upload intent
+    const intent = await api.createUploadIntent(token, {
+      filename: file.name,
+      mimeType: file.type || 'application/octet-stream',
+      byteSize: file.size,
+      entityType,
+      entityId,
+      providerId,
+    } as any);
+
+    // 2. Upload file directly to destination URL
+    const uploadRes = await fetch(intent.uploadUrl, {
+      method: intent.method || 'PUT',
+      body: file,
+      headers: {
+        'Content-Type': file.type || 'application/octet-stream',
+        ...(intent.headers || {}),
+      },
+    });
+
+    if (!uploadRes.ok) {
+      throw new Error(`Failed to upload file to storage (${uploadRes.status})`);
+    }
+
+    // 3. Confirm upload
+    return api.confirmUpload(token, { objectId: intent.objectId });
+  },
+
+  listStorageProviders: (token: string) =>
+    request<any[]>('/storage/providers', { token }),
+
+  deleteStorageProvider: (token: string, id: string) =>
+    request<{ success: boolean }>(`/storage/providers/${id}`, {
+      method: 'DELETE',
+      token,
+    }),
+
+  createStorageProvider: (token: string, input: any) =>
+    request<any>('/storage/providers', {
+      method: 'POST',
+      token,
+      body: JSON.stringify(input),
+    }),
+
+  // ─── Notifications Platform ───────────────────────────────────
+  listNotifications: (token: string, query?: ListNotificationsQuery) => {
+    const params = new URLSearchParams();
+    if (query?.channel) params.append('channel', query.channel);
+    if (query?.type) params.append('type', query.type);
+    if (query?.isRead !== undefined) params.append('isRead', String(query.isRead));
+    if (query?.limit) params.append('limit', String(query.limit));
+    const qs = params.toString() ? `?${params.toString()}` : '';
+    return request<NotificationRecordDto[]>(`/notifications${qs}`, { token });
+  },
+
+  sendNotification: (token: string, input: SendNotificationInput) =>
+    request<NotificationRecordDto>('/notifications/send', {
+      method: 'POST',
+      token,
+      body: JSON.stringify(input),
+    }),
+
+  markNotificationRead: (token: string, id: string) =>
+    request<NotificationRecordDto>(`/notifications/${id}/read`, {
+      method: 'PATCH',
+      token,
+    }),
+
+  markAllNotificationsRead: (token: string) =>
+    request<{ updatedCount: number }>('/notifications/read-all', {
+      method: 'POST',
+      token,
+    }),
+
+  getNotificationConfig: (token: string) =>
+    request<NotificationConfigDto>('/notifications/config', { token }),
+
+  updateNotificationConfig: (token: string, input: UpdateNotificationConfigInput) =>
+    request<NotificationConfigDto>('/notifications/config', {
+      method: 'PATCH',
+      token,
+      body: JSON.stringify(input),
+    }),
+
+  getNotificationStats: (token: string) =>
+    request<NotificationStatsDto>('/notifications/stats', { token }),
+
+  sendTestNotification: (token: string) =>
+    request<NotificationRecordDto>('/notifications/test', {
+      method: 'POST',
+      token,
+    }),
+
+  // --- Storage Policies ---
+  listStoragePolicies: (token: string) =>
+    request<StoragePolicyDto[]>('/storage/policies', { token }),
+
+  createStoragePolicy: (token: string, input: StoragePolicyCreateInput) =>
+    request<StoragePolicyDto>('/storage/policies', {
+      method: 'POST',
+      token,
+      body: JSON.stringify(input),
+    }),
+
+  deleteStoragePolicy: (token: string, policyId: string) =>
+    request<void>(`/storage/policies/${policyId}`, {
+      method: 'DELETE',
+      token,
+    }),
+
+  // ─── Reporting & BI Analytics ──────────────────────────────────
+  getBusinessDashboard: (token: string, rangeDays: 7 | 30 = 30) =>
+    request<BusinessDashboardDto>(`/reports/dashboard?rangeDays=${rangeDays}`, { token }),
+
+  getExecutiveReport: (token: string, query?: ReportDateRangeQuery) => {
+    const params = new URLSearchParams();
+    if (query?.startDate) params.append('startDate', query.startDate);
+    if (query?.endDate) params.append('endDate', query.endDate);
+    if (query?.locationId) params.append('locationId', query.locationId);
+    if (query?.interval) params.append('interval', query.interval);
+    const qs = params.toString() ? `?${params.toString()}` : '';
+    return request<ExecutiveReportSummaryDto>(`/reports/summary${qs}`, { token });
+  },
+
+  exportReportCsv: (token: string, query: ExportReportQuery) => {
+    const params = new URLSearchParams();
+    params.append('type', query.type);
+    if (query.startDate) params.append('startDate', query.startDate);
+    if (query.endDate) params.append('endDate', query.endDate);
+    if (query.locationId) params.append('locationId', query.locationId);
+    return request<{ filename: string; csv: string }>(`/reports/export?${params.toString()}`, { token });
+  },
+
+  // ─── Finance & Accounting Platform ─────────────────────────────
+  listAccounts: (token: string) =>
+    request<AccountDto[]>('/finance/accounts', { token }),
+
+  createAccount: (token: string, input: CreateAccountInput) =>
+    request<AccountDto>('/finance/accounts', {
+      method: 'POST',
+      token,
+      body: JSON.stringify(input),
+    }),
+
+  updateAccount: (token: string, id: string, input: UpdateAccountInput) =>
+    request<AccountDto>(`/finance/accounts/${id}`, {
+      method: 'PATCH',
+      token,
+      body: JSON.stringify(input),
+    }),
+
+  listJournalEntries: (token: string, status?: JournalEntryStatus) => {
+    const qs = status ? `?status=${status}` : '';
+    return request<JournalEntryDto[]>(`/finance/journal-entries${qs}`, { token });
+  },
+
+  getJournalEntry: (token: string, id: string) =>
+    request<JournalEntryDto>(`/finance/journal-entries/${id}`, { token }),
+
+  createJournalEntry: (token: string, input: CreateJournalEntryInput) =>
+    request<JournalEntryDto>('/finance/journal-entries', {
+      method: 'POST',
+      token,
+      body: JSON.stringify(input),
+    }),
+
+  postJournalEntry: (token: string, id: string) =>
+    request<JournalEntryDto>(`/finance/journal-entries/${id}/post`, {
+      method: 'POST',
+      token,
+    }),
+
+  voidJournalEntry: (token: string, id: string) =>
+    request<JournalEntryDto>(`/finance/journal-entries/${id}/void`, {
+      method: 'POST',
+      token,
+    }),
+
+  getTrialBalance: (token: string, query?: FinancialStatementQuery) => {
+    const params = new URLSearchParams();
+    if (query?.asOfDate) params.append('asOfDate', query.asOfDate);
+    const qs = params.toString() ? `?${params.toString()}` : '';
+    return request<TrialBalanceDto>(`/finance/statements/trial-balance${qs}`, { token });
+  },
+
+  getIncomeStatement: (token: string, query?: FinancialStatementQuery) => {
+    const params = new URLSearchParams();
+    if (query?.startDate) params.append('startDate', query.startDate);
+    if (query?.endDate) params.append('endDate', query.endDate);
+    const qs = params.toString() ? `?${params.toString()}` : '';
+    return request<IncomeStatementDto>(`/finance/statements/income-statement${qs}`, { token });
+  },
+
+  getBalanceSheet: (token: string, query?: FinancialStatementQuery) => {
+    const params = new URLSearchParams();
+    if (query?.asOfDate) params.append('asOfDate', query.asOfDate);
+    const qs = params.toString() ? `?${params.toString()}` : '';
+    return request<BalanceSheetDto>(`/finance/statements/balance-sheet${qs}`, { token });
+  },
+
+  getFinanceSummary: (token: string) =>
+    request<FinanceSummaryDto>('/finance/summary', { token }),
+
+  // ─── Workflow & Approvals Engine ────────────────────────────────
+  listWorkflowInstances: (token: string, status?: WorkflowStatus) => {
+    const qs = status ? `?status=${status}` : '';
+    return request<WorkflowInstanceDto[]>(`/workflows/instances${qs}`, { token });
+  },
+
+  getWorkflowInstance: (token: string, id: string) =>
+    request<WorkflowInstanceDto>(`/workflows/instances/${id}`, { token }),
+
+  submitWorkflowApproval: (token: string, input: SubmitApprovalInput) =>
+    request<WorkflowInstanceDto>('/workflows/instances', {
+      method: 'POST',
+      token,
+      body: JSON.stringify(input),
+    }),
+
+  reviewWorkflowStep: (
+    token: string,
+    instanceId: string,
+    stepId: string,
+    input: ReviewWorkflowStepInput,
+  ) =>
+    request<WorkflowInstanceDto>(`/workflows/instances/${instanceId}/steps/${stepId}/review`, {
+      method: 'POST',
+      token,
+      body: JSON.stringify(input),
+    }),
+
+  // ─── HR & Payroll Platform ──────────────────────────────────────
+  listDepartments: (token: string) =>
+    request<DepartmentDto[]>('/hr/departments', { token }),
+
+  createDepartment: (token: string, input: CreateDepartmentInput) =>
+    request<DepartmentDto>('/hr/departments', {
+      method: 'POST',
+      token,
+      body: JSON.stringify(input),
+    }),
+
+  listEmployees: (token: string) =>
+    request<EmployeeDto[]>('/hr/employees', { token }),
+
+  getEmployee: (token: string, id: string) =>
+    request<EmployeeDto>(`/hr/employees/${id}`, { token }),
+
+  createEmployee: (token: string, input: CreateEmployeeInput) =>
+    request<EmployeeDto>('/hr/employees', {
+      method: 'POST',
+      token,
+      body: JSON.stringify(input),
+    }),
+
+  listLeaveRequests: (token: string) =>
+    request<LeaveRequestDto[]>('/hr/leaves', { token }),
+
+  createLeaveRequest: (token: string, input: CreateLeaveRequestInput) =>
+    request<LeaveRequestDto>('/hr/leaves', {
+      method: 'POST',
+      token,
+      body: JSON.stringify(input),
+    }),
+
+  approveLeaveRequest: (token: string, id: string) =>
+    request<LeaveRequestDto>(`/hr/leaves/${id}/approve`, {
+      method: 'POST',
+      token,
+    }),
+
+  rejectLeaveRequest: (token: string, id: string) =>
+    request<LeaveRequestDto>(`/hr/leaves/${id}/reject`, {
+      method: 'POST',
+      token,
+    }),
+
+  listPayrollRuns: (token: string) =>
+    request<PayrollRunDto[]>('/hr/payroll', { token }),
+
+  createPayrollRun: (token: string, input: CreatePayrollRunInput) =>
+    request<PayrollRunDto>('/hr/payroll', {
+      method: 'POST',
+      token,
+      body: JSON.stringify(input),
+    }),
+
+  // ─── Fixed Assets Platform ──────────────────────────────────────
+  listAssets: (token: string) =>
+    request<FixedAssetDto[]>('/assets', { token }),
+
+  getAsset: (token: string, id: string) =>
+    request<FixedAssetDto>(`/assets/${id}`, { token }),
+
+  createAsset: (token: string, input: CreateFixedAssetInput) =>
+    request<FixedAssetDto>('/assets', {
+      method: 'POST',
+      token,
+      body: JSON.stringify(input),
+    }),
+
+  runDepreciation: (token: string, id: string) =>
+    request<DepreciationRecordDto>(`/assets/${id}/depreciate`, {
+      method: 'POST',
+      token,
+    }),
+
+  // ─── Projects & Billing ─────────────────────────────────────────
+  listProjects: (token: string) =>
+    request<ProjectDto[]>('/projects', { token }),
+
+  getProject: (token: string, id: string) =>
+    request<ProjectDto>(`/projects/${id}`, { token }),
+
+  createProject: (token: string, input: CreateProjectInput) =>
+    request<ProjectDto>('/projects', {
+      method: 'POST',
+      token,
+      body: JSON.stringify(input),
+    }),
+
+  createProjectTask: (token: string, projectId: string, input: CreateProjectTaskInput) =>
+    request<ProjectTaskDto>(`/projects/${projectId}/tasks`, {
+      method: 'POST',
+      token,
+      body: JSON.stringify(input),
+    }),
+
+  logTimesheet: (token: string, taskId: string, input: LogTimesheetInput) =>
+    request<TimesheetEntryDto>(`/projects/tasks/${taskId}/timesheets`, {
+      method: 'POST',
+      token,
+      body: JSON.stringify(input),
+    }),
+
+  // ─── Service Management & Helpdesk ──────────────────────────────
+  listTickets: (token: string, status?: TicketStatus, priority?: TicketPriority) => {
+    const params = new URLSearchParams();
+    if (status) params.append('status', status);
+    if (priority) params.append('priority', priority);
+    const qs = params.toString() ? `?${params.toString()}` : '';
+    return request<ServiceTicketDto[]>(`/tickets${qs}`, { token });
+  },
+
+  getTicket: (token: string, id: string) =>
+    request<ServiceTicketDto>(`/tickets/${id}`, { token }),
+
+  createTicket: (token: string, input: CreateServiceTicketInput) =>
+    request<ServiceTicketDto>('/tickets', {
+      method: 'POST',
+      token,
+      body: JSON.stringify(input),
+    }),
+
+  addTicketComment: (token: string, ticketId: string, input: AddTicketCommentInput) =>
+    request<TicketCommentDto>(`/tickets/${ticketId}/comments`, {
+      method: 'POST',
+      token,
+      body: JSON.stringify(input),
+    }),
+
+  updateTicketStatus: (token: string, ticketId: string, status: TicketStatus, resolution?: string) =>
+    request<ServiceTicketDto>(`/tickets/${ticketId}/status`, {
+      method: 'PATCH',
+      token,
+      body: JSON.stringify({ status, resolution }),
+    }),
+
+  // ─── Partner & Developer Platform ───────────────────────────────
+  listDeveloperApps: (token: string) =>
+    request<DeveloperAppDto[]>('/developers/apps', { token }),
+
+  createDeveloperApp: (token: string, input: CreateDeveloperAppInput) =>
+    request<DeveloperAppDto>('/developers/apps', {
+      method: 'POST',
+      token,
+      body: JSON.stringify(input),
+    }),
+
+  listApiKeys: (token: string) =>
+    request<ApiKeyDto[]>('/developers/keys', { token }),
+
+  createApiKey: (token: string, input: CreateApiKeyInput) =>
+    request<CreateApiKeyResultDto>('/developers/keys', {
+      method: 'POST',
+      token,
+      body: JSON.stringify(input),
+    }),
+
+  revokeApiKey: (token: string, id: string) =>
+    request<ApiKeyDto>(`/developers/keys/${id}`, {
+      method: 'DELETE',
+      token,
+    }),
+
+  /** Permanently erases the key row. Admin only, and only after it is revoked. */
+  deleteApiKey: (token: string, id: string) =>
+    request<{ deleted: boolean; id: string; name: string; keyPrefix: string }>(
+      `/developers/keys/${id}/permanent`,
+      {
+        method: 'DELETE',
+        token,
+      },
+    ),
+
+  listWebhookSubscriptions: (token: string) =>
+    request<WebhookSubscriptionDto[]>('/developers/webhooks', { token }),
+
+  createWebhookSubscription: (token: string, input: CreateWebhookSubscriptionInput) =>
+    request<WebhookSubscriptionDto>('/developers/webhooks', {
+      method: 'POST',
+      token,
+      body: JSON.stringify(input),
+    }),
+
+  deleteWebhookSubscription: (token: string, id: string) =>
+    request<{ success: boolean }>(`/developers/webhooks/${id}`, {
+      method: 'DELETE',
+      token,
+    }),
+
+  // ─── Telegram Platform ──────────────────────────────────────────
+  // ─── Telegram Multi-Bot Platform ─────────────────────────────────
+  listTelegramBots: (token: string) =>
+    request<TelegramBotDto[]>('/telegram/bots', { token }),
+
+  getTelegramBot: (token: string, id: string) =>
+    request<TelegramBotDto>(`/telegram/bots/${id}`, { token }),
+
+  createTelegramBot: (token: string, input: CreateTelegramBotInput) =>
+    request<TelegramBotDto>('/telegram/bots', {
+      method: 'POST',
+      token,
+      body: JSON.stringify(input),
+    }),
+
+  updateTelegramBot: (token: string, id: string, input: UpdateTelegramBotInput) =>
+    request<TelegramBotDto>(`/telegram/bots/${id}`, {
+      method: 'PATCH',
+      token,
+      body: JSON.stringify(input),
+    }),
+
+  deleteTelegramBot: (token: string, id: string) =>
+    request<{ success: boolean }>(`/telegram/bots/${id}`, {
+      method: 'DELETE',
+      token,
+    }),
+
+  testTelegramBot: (token: string, id: string) =>
+    request<TelegramBotTestResult>(`/telegram/bots/${id}/test`, {
+      method: 'POST',
+      token,
+    }),
+
+  testTelegramToken: (token: string, botToken: string) =>
+    request<TelegramBotTestResult>('/telegram/bots/test-token', {
+      method: 'POST',
+      token,
+      body: JSON.stringify({ botToken }),
+    }),
+
+  sendTelegramBotBroadcast: (token: string, id: string, message: string) =>
+    request<{ sentCount: number; failedCount: number; totalDestinations: number }>(
+      `/telegram/bots/${id}/broadcast`,
+      {
+        method: 'POST',
+        token,
+        body: JSON.stringify({ message }),
+      }
+    ),
+
+  listTelegramBindings: (token: string) =>
+    request<TelegramChatBindingDto[]>('/telegram/bindings', { token }),
+
+  bindTelegramChat: (token: string, input: BindTelegramChatInput) =>
+    request<TelegramChatBindingDto>('/telegram/bindings', {
+      method: 'POST',
+      token,
+      body: JSON.stringify(input),
+    }),
+
+  updateTelegramBinding: (token: string, id: string, input: UpdateTelegramBindingInput) =>
+    request<TelegramChatBindingDto>(`/telegram/bindings/${id}`, {
+      method: 'PATCH',
+      token,
+      body: JSON.stringify(input),
+    }),
+
+  deleteTelegramBinding: (token: string, id: string) =>
+    request<{ success: boolean }>(`/telegram/bindings/${id}`, {
+      method: 'DELETE',
+      token,
+    }),
+
+  sendTelegramBroadcast: (token: string, message: string, botId?: string) =>
+    request<{ sentCount: number; failedCount?: number }>('/telegram/broadcast', {
+      method: 'POST',
+      token,
+      body: JSON.stringify({ message, botId }),
+    }),
+
+  executeTelegramCommand: (token: string, command: string, params?: string) =>
+    request<{ command: string; reply: string }>('/telegram/command', {
+      method: 'POST',
+      token,
+      body: JSON.stringify({ command, params }),
+    }),
+
+  // ─── Flow Automation Platform (n8n Engine) ───────────────────────
+  listFlows: (token: string) =>
+    request<AutomationFlowDto[]>('/flows', { token }),
+
+  getFlow: (token: string, id: string) =>
+    request<AutomationFlowDto>(`/flows/${id}`, { token }),
+
+  createFlow: (token: string, input: CreateFlowInput) =>
+    request<AutomationFlowDto>('/flows', {
+      method: 'POST',
+      token,
+      body: JSON.stringify(input),
+    }),
+
+  updateFlow: (token: string, id: string, input: UpdateFlowInput) =>
+    request<AutomationFlowDto>(`/flows/${id}`, {
+      method: 'PATCH',
+      token,
+      body: JSON.stringify(input),
+    }),
+
+  deleteFlow: (token: string, id: string) =>
+    request<{ success: boolean }>(`/flows/${id}`, {
+      method: 'DELETE',
+      token,
+    }),
+
+  executeFlow: (token: string, id: string, payload: Record<string, any> = {}) =>
+    request<FlowExecutionDto>(`/flows/${id}/execute`, {
+      method: 'POST',
+      token,
+      body: JSON.stringify({ payload }),
+    }),
+
+  listFlowExecutions: (token: string, id: string) =>
+    request<FlowExecutionDto[]>(`/flows/${id}/executions`, { token }),
+
+  // ─── Visual Bot Builder & Workflow Automation ─────────────────────
+  listBotWorkflows: (token: string, botId: string) =>
+    request<BotWorkflowDto[]>(`/bot-builder/bots/${botId}/workflows`, { token }),
+
+  getBotWorkflow: (token: string, id: string) =>
+    request<BotWorkflowDto>(`/bot-builder/workflows/${id}`, { token }),
+
+  createBotWorkflowForBot: (token: string, botId: string, input: { name: string; description?: string }) =>
+    request<BotWorkflowDto>(`/bot-builder/bots/${botId}/workflows`, {
+      method: 'POST',
+      token,
+      body: JSON.stringify(input),
+    }),
+
+  createBotWorkflow: (token: string, input: CreateBotWorkflowInput) =>
+    request<BotWorkflowDto>('/bot-builder/workflows', {
+      method: 'POST',
+      token,
+      body: JSON.stringify(input),
+    }),
+
+  updateBotWorkflow: (token: string, id: string, input: UpdateBotWorkflowInput) =>
+    request<BotWorkflowDto>(`/bot-builder/workflows/${id}`, {
+      method: 'PATCH',
+      token,
+      body: JSON.stringify(input),
+    }),
+
+  deleteBotWorkflow: (token: string, id: string) =>
+    request<{ success: boolean }>(`/bot-builder/workflows/${id}`, {
+      method: 'DELETE',
+      token,
+    }),
+
+  publishBotWorkflow: (token: string, id: string, input: PublishWorkflowInput) =>
+    request<BotWorkflowVersionDto>(`/bot-builder/workflows/${id}/publish`, {
+      method: 'POST',
+      token,
+      body: JSON.stringify(input),
+    }),
+
+  rollbackBotWorkflow: (token: string, id: string, versionNumber: number) =>
+    request<BotWorkflowDto>(`/bot-builder/workflows/${id}/rollback/${versionNumber}`, {
+      method: 'POST',
+      token,
+    }),
+
+  listWorkflowVersions: (token: string, id: string) =>
+    request<BotWorkflowVersionDto[]>(`/bot-builder/workflows/${id}/versions`, { token }),
+
+  listBotExecutions: (token: string, botId: string, page = 1, limit = 20, status?: string) => {
+    let url = `/bot-builder/bots/${botId}/executions?page=${page}&limit=${limit}`;
+    if (status) url += `&status=${status}`;
+    return request<BotExecutionDto[]>(url, { token });
+  },
+
+  getBotExecution: (token: string, id: string) =>
+    request<BotExecutionDto>(`/bot-builder/executions/${id}`, { token }),
+
+  getBotAnalytics: (token: string, botId: string) =>
+    request<any>(`/bot-builder/bots/${botId}/analytics`, { token }),
+
+  listBotCommands: (token: string, botId: string) =>
+    request<BotCommandDto[]>(`/bot-builder/bots/${botId}/commands`, { token }),
+
+  createBotCommand: (token: string, botId: string, input: CreateBotCommandInput) =>
+    request<BotCommandDto>(`/bot-builder/bots/${botId}/commands`, {
+      method: 'POST',
+      token,
+      body: JSON.stringify(input),
+    }),
+
+  updateBotCommand: (token: string, commandId: string, input: UpdateBotCommandInput) =>
+    request<BotCommandDto>(`/bot-builder/commands/${commandId}`, {
+      method: 'PATCH',
+      token,
+      body: JSON.stringify(input),
+    }),
+
+  deleteBotCommand: (token: string, commandId: string) =>
+    request<{ success: boolean }>(`/bot-builder/commands/${commandId}`, {
+      method: 'DELETE',
+      token,
+    }),
+
+  syncBotCommands: (token: string, botId: string) =>
+    request<any>(`/bot-builder/bots/${botId}/commands/sync`, {
+      method: 'POST',
+      token,
+    }),
+
+  // ─── Delivery & Fleet Dispatch (Spec §45) ─────────────────────────
+  listDeliveryOrders: (token: string, params: { status?: string; search?: string } = {}) => {
+    const qs = new URLSearchParams();
+    if (params.status) qs.set('status', params.status);
+    if (params.search) qs.set('search', params.search);
+    const q = qs.toString();
+    return request<DeliveryOrderDto[]>(`/delivery/orders${q ? `?${q}` : ''}`, { token });
+  },
+
+  createDeliveryOrder: (token: string, input: CreateDeliveryOrderInput) =>
+    request<DeliveryOrderDto>('/delivery/orders', {
+      method: 'POST',
+      token,
+      body: JSON.stringify(input),
+    }),
+
+  getDeliveryOrder: (token: string, id: string) =>
+    request<DeliveryOrderDto>(`/delivery/orders/${id}`, { token }),
+
+  trackDeliveryOrder: (identifier: string, token?: string) =>
+    request<DeliveryOrderDto>(`/delivery/track/${encodeURIComponent(identifier)}`, { token }),
+
+  updateDeliveryStatus: (
+    token: string,
+    id: string,
+    input: { status: string; proofOfDelivery?: string; notes?: string }
+  ) =>
+    request<DeliveryOrderDto>(`/delivery/orders/${id}/status`, {
+      method: 'PATCH',
+      token,
+      body: JSON.stringify(input),
+    }),
+
+  assignDriver: (token: string, orderId: string, driverId: string) =>
+    request<DeliveryOrderDto>(`/delivery/orders/${orderId}/assign`, {
+      method: 'POST',
+      token,
+      body: JSON.stringify({ driverId }),
+    }),
+
+  getDrivers(token: string) {
+    return request<DeliveryDriverDto[]>('/delivery/drivers', { token });
+  },
+  createDriver(token: string, payload: CreateDriverInput) {
+    return request<DeliveryDriverDto>('/delivery/drivers', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+      token,
+    });
+  },
+  updateDriver(token: string, id: string, payload: any) {
+    return request<DeliveryDriverDto>(`/delivery/drivers/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+      token,
+    });
+  },
+  deleteDriver(token: string, id: string) {
+    return request<void>(`/delivery/drivers/${id}`, {
+      method: 'DELETE',
+      token,
+    });
+  },
+
+
+  pingDriverLocation: (
+    token: string,
+    driverId: string,
+    data: { latitude: number; longitude: number; heading?: number; batteryLevel?: number }
+  ) =>
+    request<DeliveryDriverDto>(`/delivery/drivers/${driverId}/location`, {
+      method: 'POST',
+      token,
+      body: JSON.stringify(data),
+    }),
+
+  getLiveTrackingSnapshot: (token: string) =>
+    request<LiveTrackingSnapshotDto>('/delivery/live-tracking', { token }),
+
+  // ─── AI Copilot Assistant (Spec §68-§71) ──────────────────────────
+  copilotChat: (token: string, message: string, pageContext?: string) =>
+    request<CopilotChatResponse>('/ai/chat', {
+      method: 'POST',
+      token,
+      body: JSON.stringify({ message, pageContext }),
+    }),
+
+  getCopilotSuggestions: (token: string, context: string = 'dashboard') =>
+    request<{ context: string; prompts: string[] }>(`/ai/suggestions?context=${context}`, {
+      token,
+    }),
+
+  // ─── Industry Verticals (Spec §17-§22, §112) ──────────────────────
+  getIndustryConfig: (token: string) =>
+    request<IndustryConfigDto>('/industry/config', { token }),
+
+  setupIndustryPreset: (token: string, preset: string) =>
+    request<IndustryConfigDto>('/industry/setup', {
+      method: 'POST',
+      token,
+      body: JSON.stringify({ preset }),
+    }),
+
+  listTables: (token: string) =>
+    request<TableDto[]>('/industry/restaurant/tables', { token }),
+
+  listKDSTickets: (token: string) =>
+    request<KDSTicketDto[]>('/industry/restaurant/kds', { token }),
+};
+
+

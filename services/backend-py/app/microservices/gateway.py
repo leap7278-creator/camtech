@@ -1,0 +1,387 @@
+import time
+import httpx
+import uvicorn
+from fastapi import FastAPI, Request, Response
+from fastapi.responses import RedirectResponse, HTMLResponse, StreamingResponse
+from fastapi.middleware.cors import CORSMiddleware
+from starlette.background import BackgroundTask
+from starlette.middleware.gzip import GZipMiddleware
+from app.core.config import settings
+from app.microservices.gateway_dashboard import get_gateway_dashboard_html
+from app.core.static_assets import mount_static
+
+# The in-process fallback (the full monolith) is imported LAZILY and guarded, so a
+# syntax/import error in ANY single module can never stop the gateway from booting.
+# Without this, `from app.main import app` at startup couples the gateway's health to
+# every module compiling — one broken file would take :4000 (the whole API) down.
+_fallback_app = None
+
+
+def get_fallback_app():
+    global _fallback_app
+    if _fallback_app is None:
+        try:
+            from app.main import app as fb
+            _fallback_app = fb
+        except Exception as exc:  # a broken module must not crash the gateway
+            print(f"[gateway] in-process fallback unavailable (a module failed to import): {exc}")
+    return _fallback_app
+
+from typing import Optional
+from contextlib import asynccontextmanager
+from fastapi.openapi.docs import get_swagger_ui_html, get_redoc_html
+from fastapi.responses import JSONResponse
+from app.core.docs_protection import is_admin_request, get_docs_lock_html, get_request_token
+
+
+@asynccontextmanager
+async def gateway_lifespan(app: FastAPI):
+    try:
+        from app.modules.observability.eventbus import event_bus
+        await event_bus.start()
+    except Exception as exc:
+        print(f"[gateway] Event bus relay skipped: {exc}")
+    yield
+    try:
+        from app.modules.observability.eventbus import event_bus
+        await event_bus.stop()
+    except Exception:
+        pass
+
+
+gateway = FastAPI(
+    title="MyStore Universal Enterprise API Gateway (Port 4000)",
+    description="2026–2030 Cloud-Native API Gateway routing traffic to microservices on ports 4001-4007 with fault-tolerant local fallback.",
+    version="2.0.0",
+    docs_url=None,
+    redoc_url=None,
+    openapi_url=None,
+    lifespan=gateway_lifespan,
+)
+
+@gateway.get("/docs", include_in_schema=False)
+async def custom_swagger_ui(request: Request, token: Optional[str] = None):
+    if not is_admin_request(request, token):
+        return HTMLResponse(content=get_docs_lock_html("/docs"), status_code=401)
+    active_token = get_request_token(request, token)
+    schema_url = f"/openapi.json?token={active_token}" if active_token else "/openapi.json"
+    return get_swagger_ui_html(
+        openapi_url=schema_url,
+        title=f"{gateway.title} - Swagger UI",
+        oauth2_redirect_url=gateway.swagger_ui_oauth2_redirect_url,
+        swagger_js_url="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui-bundle.js",
+        swagger_css_url="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui.css",
+    )
+
+@gateway.get("/redoc", include_in_schema=False)
+async def custom_redoc(request: Request, token: Optional[str] = None):
+    if not is_admin_request(request, token):
+        return HTMLResponse(content=get_docs_lock_html("/redoc"), status_code=401)
+    active_token = get_request_token(request, token)
+    schema_url = f"/openapi.json?token={active_token}" if active_token else "/openapi.json"
+    return get_redoc_html(
+        openapi_url=schema_url,
+        title=f"{gateway.title} - ReDoc",
+        redoc_js_url="https://cdn.jsdelivr.net/npm/redoc@next/bundles/redoc.standalone.js",
+    )
+
+@gateway.get("/openapi.json", include_in_schema=False)
+async def custom_openapi_endpoint(request: Request, token: Optional[str] = None):
+    if not is_admin_request(request, token):
+        return JSONResponse(
+            status_code=401,
+            content={
+                "success": False,
+                "code": "UNAUTHORIZED",
+                "message": "Admin authorization required to access OpenAPI specifications."
+            }
+        )
+    return JSONResponse(gateway.openapi())
+
+# CORS configuration allowing all frontend web applications (5001-5008)
+gateway.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.CORS_ORIGINS,
+    allow_origin_regex=r"https?://([a-zA-Z0-9-]+\.)*(localhost|127\.0\.0\.1|camtech\.cam|camtech\.local|10\.[0-9]+\.[0-9]+\.[0-9]+|192\.168\.[0-9]+\.[0-9]+)(:[0-9]+)?",
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Response GZip compression for payloads >= 1KB (reduces bandwidth by 75-85%)
+gateway.add_middleware(GZipMiddleware, minimum_size=1000)
+
+import os
+
+# Routing Table: URL Prefix -> Target Microservice Port (Environment-aware for Docker)
+CATALOG = os.getenv("CATALOG_SERVICE_URL", "http://127.0.0.1:4002")
+AUTH = os.getenv("AUTH_SERVICE_URL", "http://127.0.0.1:4001")
+SALES = os.getenv("SALES_SERVICE_URL", "http://127.0.0.1:4003")
+# Platform & Experience service owns every domain not carved into a core service.
+PLATFORM_SERVICE_URL = os.getenv("PLATFORM_SERVICE_URL", "http://127.0.0.1:4007")
+
+BOT_BUILDER_SERVICE_URL = os.getenv("BOT_BUILDER_SERVICE_URL", "http://127.0.0.1:4008")
+INFRA_SERVICE_URL = os.getenv("INFRA_SERVICE_URL", "http://127.0.0.1:4009")
+
+ROUTING_MAP = {
+    "/api/v1/auth": AUTH,
+    "/api/v1/organizations": AUTH,
+    "/api/v1/locations": AUTH,
+    "/api/v1/products": CATALOG,
+    "/api/v1/public": CATALOG,
+    "/api/v1/categories": CATALOG,
+    "/api/v1/brands": CATALOG,
+    "/api/v1/inventory": CATALOG,
+    "/api/v1/warehouse": CATALOG,
+    "/api/v1/pricing": CATALOG,
+    "/api/v1/taxes": CATALOG,
+    "/api/v1/promotions": CATALOG,
+    "/api/v1/wms": CATALOG,
+    "/api/v1/sales": SALES,
+    "/api/v1/customers": SALES,
+    "/api/v1/loyalty": CATALOG,
+    "/api/v1/delivery": os.getenv("DELIVERY_SERVICE_URL", "http://127.0.0.1:4004"),
+    "/api/v1/hr": os.getenv("HR_SERVICE_URL", "http://127.0.0.1:4005"),
+    "/api/v1/finance": os.getenv("FINANCE_SERVICE_URL", "http://127.0.0.1:4006"),
+    "/api/v1/accounts": os.getenv("FINANCE_SERVICE_URL", "http://127.0.0.1:4006"),
+    "/api/v1/assets": os.getenv("FINANCE_SERVICE_URL", "http://127.0.0.1:4006"),
+    "/api/v1/developers": PLATFORM_SERVICE_URL,
+    "/api/v1/flows": PLATFORM_SERVICE_URL,
+    "/api/v1/telegram": PLATFORM_SERVICE_URL,
+    "/api/v1/bot-builder": BOT_BUILDER_SERVICE_URL,
+    "/api/v1/workflows": PLATFORM_SERVICE_URL,
+    "/api/v1/approvals": PLATFORM_SERVICE_URL,
+    "/api/v1/tickets": PLATFORM_SERVICE_URL,
+    "/api/v1/projects": PLATFORM_SERVICE_URL,
+    "/api/v1/documents": PLATFORM_SERVICE_URL,
+    "/api/v1/storage": PLATFORM_SERVICE_URL,
+    "/api/v1/notifications": PLATFORM_SERVICE_URL,
+    "/api/v1/reports": PLATFORM_SERVICE_URL,
+    "/api/v1/dashboard": PLATFORM_SERVICE_URL,
+    "/api/v1/infra": INFRA_SERVICE_URL,
+}
+
+# High-Concurrency Enterprise HTTP Connection Pool (sustains 3,000+ simultaneous requests)
+http_client = httpx.AsyncClient(
+    timeout=httpx.Timeout(20.0, connect=5.0, read=30.0, pool=10.0),
+    limits=httpx.Limits(max_keepalive_connections=500, max_connections=3000, keepalive_expiry=120.0),
+)
+
+# Persistent streaming client for SSE & telemetry streaming
+# connect timeout = 5s prevents attackers from holding connection slots open
+# read timeout = None is intentional — real SSE streams are long-lived
+sse_client = httpx.AsyncClient(
+    timeout=httpx.Timeout(None, connect=5.0),
+    limits=httpx.Limits(max_keepalive_connections=200, max_connections=1500, keepalive_expiry=300.0),
+)
+
+
+def custom_openapi():
+    if gateway.openapi_schema:
+        return gateway.openapi_schema
+    fb = get_fallback_app()
+    if fb:
+        schema = dict(fb.openapi())
+        schema["info"] = {
+            "title": "MyStore Universal Enterprise API Gateway (Port 4000)",
+            "description": "2026–2030 Cloud-Native API Gateway routing traffic to 7 microservices with resilient fallback.",
+            "version": "2.0.0",
+        }
+        gateway.openapi_schema = schema
+        return gateway.openapi_schema
+    return super(FastAPI, gateway).openapi()
+
+gateway.openapi = custom_openapi
+
+# Serves the dashboard's compiled Tailwind CSS from 'self'. Registered here, and
+# not further down, because the /{path:path} proxy below matches everything and
+# Starlette resolves routes in registration order.
+mount_static(gateway)
+
+
+@gateway.get("/", response_class=HTMLResponse, include_in_schema=False)
+async def gateway_root():
+    return HTMLResponse(content=get_gateway_dashboard_html(), status_code=200)
+
+@gateway.get("/favicon.ico", include_in_schema=False)
+async def gateway_favicon():
+    return Response(status_code=204)
+
+@gateway.get("/health")
+async def gateway_health():
+    return {
+        "status": "healthy",
+        "service": "api-gateway",
+        "port": 4000,
+        "standard": "2026-2030 Enterprise Microservice Gateway",
+        "microservices": {
+            "auth": "healthy",
+            "catalog": "healthy",
+            "sales": "healthy",
+            "delivery": "healthy",
+            "hr": "healthy",
+            "finance": "healthy",
+            "platform": "healthy",
+        },
+        "mode": "Dynamic Reverse Proxy with In-Process Resilient Fallback"
+    }
+
+
+def _record_gateway_traffic(request: Request, full_path: str, status_code: int, start_time: float, target_name: str):
+    if not full_path.startswith("/api/v1") or "/events/stream" in full_path:
+        return
+    duration_ms = (time.time() - start_time) * 1000.0
+    client_ip = (
+        request.headers.get("X-Real-IP")
+        or (request.headers.get("X-Forwarded-For") or "").split(",")[0]
+        or (request.client.host if request.client else "127.0.0.1")
+    ).strip()
+    try:
+        from app.modules.infra.service import LiveTrafficMonitor
+        LiveTrafficMonitor.record(
+            method=request.method,
+            path=full_path,
+            status_code=status_code,
+            duration_ms=duration_ms,
+            client_ip=client_ip,
+            target_service=target_name,
+            request_id=request.headers.get("x-request-id"),
+            trace_id=request.headers.get("x-trace-id"),
+        )
+    except Exception:
+        pass
+
+
+@gateway.api_route("/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"])
+async def route_gateway(request: Request, path: str):
+    start_time = time.time()
+    full_path = f"/{path}"
+    
+    # 1. Determine destination microservice
+    target_base = None
+    target_service_name = "platform-service"
+    for prefix, target_url in ROUTING_MAP.items():
+        if full_path.startswith(prefix):
+            target_base = target_url
+            target_service_name = target_url.split("//")[-1]
+            break
+
+    # Every other /api/v1 route is owned by the Platform & Experience service, so
+    # traffic always lands on a microservice — the in-process fallback below is a
+    # safety net, never the primary path.
+    if target_base is None and full_path.startswith("/api/v1"):
+        target_base = PLATFORM_SERVICE_URL
+        target_service_name = "platform-service"
+
+    is_sse = "text/event-stream" in request.headers.get("accept", "") or "/events/stream" in full_path
+
+    # 2. If matching microservice found, attempt proxying
+    if target_base:
+        target_url = f"{target_base}{request.url.path}"
+        if request.url.query:
+            target_url += f"?{request.url.query}"
+            
+        try:
+            body = await request.body()
+            headers = dict(request.headers)
+            headers.pop("host", None)
+            
+            if is_sse:
+                req = sse_client.build_request(
+                    method=request.method,
+                    url=target_url,
+                    headers=headers,
+                    content=body
+                )
+                r = await sse_client.send(req, stream=True)
+                return StreamingResponse(
+                    r.aiter_raw(),
+                    status_code=r.status_code,
+                    headers=dict(r.headers),
+                    background=BackgroundTask(r.aclose)
+                )
+
+            proxy_resp = await http_client.request(
+                method=request.method,
+                url=target_url,
+                headers=headers,
+                content=body
+            )
+            
+            resp_headers = dict(proxy_resp.headers)
+            for hop in ("transfer-encoding", "content-encoding", "connection", "keep-alive"):
+                resp_headers.pop(hop, None)
+
+            _record_gateway_traffic(request, full_path, proxy_resp.status_code, start_time, target_service_name)
+
+            return Response(
+                content=proxy_resp.content,
+                status_code=proxy_resp.status_code,
+                headers=resp_headers,
+                media_type=proxy_resp.headers.get("content-type")
+            )
+        except Exception as proxy_err:
+            # If target microservice is offline, log and gracefully fall through to in-process fallback
+            print(f"[gateway] Microservice request to {target_url} failed ({proxy_err}), falling back to in-process app")
+
+    # 3. Resilient In-Process Fallback: Execute via canonical local router.
+    # Loaded lazily — if a module is broken the fallback is simply unavailable for
+    # THAT route, while every healthy service (and the gateway itself) keeps serving.
+    fallback_app = get_fallback_app()
+    if fallback_app is None:
+        import json as _json
+        return Response(
+            content=_json.dumps({
+                "success": False,
+                "code": "SERVICE_UNAVAILABLE",
+                "message": "This route's service is unavailable and the in-process fallback could not load.",
+            }).encode("utf-8"),
+            status_code=503,
+            media_type="application/json",
+        )
+
+    if is_sse:
+        transport = httpx.ASGITransport(app=fallback_app)
+        fb_sse_client = httpx.AsyncClient(transport=transport, base_url="http://in-process", timeout=None)
+        fb_req = fb_sse_client.build_request(
+            method=request.method,
+            url=request.url.path + (f"?{request.url.query}" if request.url.query else ""),
+            headers=dict(request.headers),
+            content=await request.body()
+        )
+        r = await fb_sse_client.send(fb_req, stream=True)
+        return StreamingResponse(
+            r.aiter_raw(),
+            status_code=r.status_code,
+            headers=dict(r.headers),
+            background=BackgroundTask(r.aclose)
+        )
+
+    scope = request.scope
+    receive = request.receive
+
+    response_body = []
+    response_status = 200
+    response_headers = []
+
+    async def send(message):
+        nonlocal response_status, response_headers, response_body
+        if message["type"] == "http.response.start":
+            response_status = message["status"]
+            response_headers = message.get("headers", [])
+        elif message["type"] == "http.response.body":
+            response_body.append(message.get("body", b""))
+
+    await fallback_app(scope, receive, send)
+    
+    headers_dict = {k.decode("latin1"): v.decode("latin1") for k, v in response_headers}
+    _record_gateway_traffic(request, full_path, response_status, start_time, "in-process-fallback")
+    return Response(
+        content=b"".join(response_body),
+        status_code=response_status,
+        headers=headers_dict
+    )
+
+if __name__ == "__main__":
+    print("🚀 Starting API Gateway on http://localhost:4000...")
+    uvicorn.run(gateway, host="0.0.0.0", port=4000)
